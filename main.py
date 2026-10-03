@@ -1,11 +1,33 @@
 from datetime import datetime, timedelta
 import os
 import sqlite3
+from threading import Thread
+from flask import Flask
 import telebot
 from telebot import types
 
 TOKEN = "8797963662:AAGi6DZhW6Fl3bWwGMELIluOsx7F0xw0JdI"
 bot = telebot.TeleBot(TOKEN)
+
+# --- МИНИ-СЕРВЕР ДЛЯ RENDER (чтобы веб-сервис не падал по тайм-ауту) ---
+app = Flask("")
+
+
+@app.route("/")
+def home():
+  return "Bot is active!"
+
+
+def run_web():
+  app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
+
+
+def keep_alive():
+  t = Thread(target=run_web)
+  t.start()
+
+
+# -----------------------------------------------------------------------
 
 # Имя файла базы данных SQLite
 DB_FILE = "homework.db"
@@ -35,7 +57,6 @@ subjects_list = [
 def init_db():
   conn = sqlite3.connect(DB_FILE)
   cursor = conn.cursor()
-  # Создаем таблицу для глобальных домашних заданий старосты
   cursor.execute("""
         CREATE TABLE IF NOT EXISTS homeworks (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -51,7 +72,6 @@ def init_db():
 init_db()
 
 
-# Функции для работы с базой вместо JSON
 def load_global_homeworks():
   conn = sqlite3.connect(DB_FILE)
   cursor = conn.cursor()
@@ -88,10 +108,7 @@ def delete_homework_from_db(subject, date_val, text_val):
   conn.close()
 
 
-# Загружаем актуальные задания из базы в оперативную память при старте
 homework_storage = load_global_homeworks()
-
-# Личные базы пользователей:
 user_data = {}
 
 
@@ -109,13 +126,11 @@ def init_user(user_id):
     }
 
 
-# Функция автоматической очистки устаревших домашних заданий
 def clean_old_homeworks(user_id):
   today = datetime.now().date()
   current_year = today.year
   changed = False
 
-  # Чистим у конкретного пользователя в памяти
   for state_type in ["active", "completed"]:
     for subj in subjects_list:
       filtered_tasks = []
@@ -136,7 +151,6 @@ def clean_old_homeworks(user_id):
 
       user_data[user_id][state_type][subj] = filtered_tasks
 
-  # Чистим глобальное хранилище и удаляем просроченные из SQLite
   for subj in subjects_list:
     filtered_global = []
     for t_info in homework_storage[subj]:
@@ -152,7 +166,6 @@ def clean_old_homeworks(user_id):
         if task_date >= today:
           filtered_global.append(t_info)
         else:
-          # Удаляем устаревшее из базы данных
           delete_homework_from_db(subj, t_info["date"], t_info["text"])
           changed = True
       except ValueError:
@@ -163,7 +176,6 @@ def clean_old_homeworks(user_id):
 
 
 def get_welcome_markup():
-  """Клавиатура главного меню"""
   markup = types.InlineKeyboardMarkup(row_width=2)
   btn1 = types.InlineKeyboardButton("Всё Д/З", callback_data="btn_all_hw")
   btn2 = types.InlineKeyboardButton("Д/З на завтра", callback_data="btn_tomorrow")
@@ -213,7 +225,6 @@ def callback_query(call):
     user_data[user_id]["step"] = None
     user_data[user_id]["temp_date"] = None
 
-  # 1. Возврат на главную
   if call.data == "go_home":
     bot.answer_callback_query(call.id)
     bot.edit_message_text(
@@ -226,7 +237,6 @@ def callback_query(call):
     )
     user_data[user_id]["current_msg_id"] = message_id
 
-  # 2. Д/З на завтра
   elif call.data == "btn_tomorrow":
     bot.answer_callback_query(call.id)
 
@@ -279,7 +289,6 @@ def callback_query(call):
         text, chat_id, message_id, reply_markup=markup, parse_mode="Markdown"
     )
 
-  # 3. Всё Д/З
   elif call.data == "btn_all_hw":
     bot.answer_callback_query(call.id)
 
@@ -320,7 +329,6 @@ def callback_query(call):
         text, chat_id, message_id, reply_markup=markup, parse_mode="Markdown"
     )
 
-  # 4. Выполненное Д/З
   elif call.data == "btn_done":
     bot.answer_callback_query(call.id)
     clean_old_homeworks(user_id)
@@ -354,7 +362,6 @@ def callback_query(call):
         text, chat_id, message_id, reply_markup=markup, parse_mode="Markdown"
     )
 
-  # Перенос задания в выполненные
   elif call.data.startswith("done_"):
     bot.answer_callback_query(call.id, "Задание выполнено! ✅")
     parts = call.data.replace("done_", "").rsplit("_", 1)
@@ -394,7 +401,6 @@ def callback_query(call):
         text, chat_id, message_id, reply_markup=markup, parse_mode="Markdown"
     )
 
-  # Возврат задания из выполненных обратно
   elif call.data.startswith("undone_"):
     bot.answer_callback_query(call.id, "Задание возвращено в активные! ↩️")
     parts = call.data.replace("undone_", "").rsplit("_", 1)
@@ -437,7 +443,6 @@ def callback_query(call):
         text, chat_id, message_id, reply_markup=markup, parse_mode="Markdown"
     )
 
-  # Выбор предмета старостой для добавления
   elif call.data == "choose_subject":
     bot.answer_callback_query(call.id)
     user_data[user_id]["step"] = None
@@ -485,7 +490,6 @@ def callback_query(call):
         parse_mode="Markdown",
     )
 
-  # ----------------- РУЧНОЕ УДАЛЕНИЕ ДЗ СТАРОСТОЙ -----------------
   elif call.data == "starosta_delete_menu":
     bot.answer_callback_query(call.id)
 
@@ -527,14 +531,12 @@ def callback_query(call):
       subj = parts[0]
       try:
         idx = int(parts[1])
-        # Удаляем из глобального хранилища в памяти и из SQLite
         if idx < len(homework_storage[subj]):
           removed_task = homework_storage[subj].pop(idx)
           delete_homework_from_db(
               subj, removed_task["date"], removed_task["text"]
           )
 
-        # Синхронно удаляем у всех пользователей
         for uid in user_data:
           if idx < len(user_data[uid]["active"][subj]):
             user_data[uid]["active"][subj].pop(idx)
@@ -543,7 +545,6 @@ def callback_query(call):
       except ValueError:
         pass
 
-    # Перенаправляем обратно в меню удаления
     text = "🗑 **Выберите задание для удаления:**\n\n"
     markup = types.InlineKeyboardMarkup()
     has_any_tasks = False
@@ -589,7 +590,6 @@ def callback_query(call):
     bot.edit_message_text(starosta_text, chat_id, message_id, reply_markup=markup)
 
 
-# Обработчик текста
 @bot.message_handler(func=lambda message: True)
 def handle_text(message):
   SECRET_CODE = "1234"
@@ -742,7 +742,6 @@ def handle_text(message):
 
     task_info = {"date": date_val, "text": text}
 
-    # Сохраняем в базу данных SQLite (теперь данные не пропадут!)
     add_homework_to_db(subject, date_val, text)
     homework_storage[subject].append(task_info)
 
@@ -780,5 +779,9 @@ def handle_text(message):
     pass
 
 
-print("Бот запущен с поддержкой SQLite базы данных...")
-bot.infinity_polling()
+if __name__ == "__main__":
+  # Запускаем фоновый веб-сервер для Render
+  keep_alive()
+  print("Бот и веб-сервер запущены...")
+  # Запуск самого бота
+  bot.infinity_polling()
