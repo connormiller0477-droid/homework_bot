@@ -52,6 +52,26 @@ subjects_list = [
 ]
 
 
+def parse_flexible_date(date_text):
+    """Превращает даты вида 9.9.2026, 09.9.2026, 9.9 или 09.09.2026 в объект date."""
+    date_text = date_text.strip()
+    current_year = datetime.now().year
+    parts = date_text.split(".")
+
+    if len(parts) == 2:
+        day, month = parts
+        formatted_str = f"{day.zfill(2)}.{month.zfill(2)}.{current_year}"
+        return datetime.strptime(formatted_str, "%d.%m.%Y").date()
+    elif len(parts) == 3:
+        day, month, year = parts
+        if len(year) == 2:
+            year = "20" + year
+        formatted_str = f"{day.zfill(2)}.{month.zfill(2)}.{year}"
+        return datetime.strptime(formatted_str, "%d.%m.%Y").date()
+    else:
+        raise ValueError("Неверный формат даты")
+
+
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
@@ -126,21 +146,13 @@ def init_user(user_id):
 
 def clean_old_homeworks(user_id):
     today = datetime.now().date()
-    current_year = today.year
 
     for state_type in ["active", "completed"]:
         for subj in subjects_list:
             filtered_tasks = []
             for t_info in user_data[user_id][state_type][subj]:
-                date_text = t_info["date"].strip()
                 try:
-                    if len(date_text.split(".")) == 2:
-                        task_date = datetime.strptime(
-                            f"{date_text}.{current_year}", "%d.%m.%Y"
-                        ).date()
-                    else:
-                        task_date = datetime.strptime(date_text, "%d.%m.%Y").date()
-
+                    task_date = parse_flexible_date(t_info["date"])
                     if task_date >= today:
                         filtered_tasks.append(t_info)
                 except ValueError:
@@ -150,15 +162,8 @@ def clean_old_homeworks(user_id):
     for subj in subjects_list:
         filtered_global = []
         for t_info in homework_storage[subj]:
-            date_text = t_info["date"].strip()
             try:
-                if len(date_text.split(".")) == 2:
-                    task_date = datetime.strptime(
-                        f"{date_text}.{current_year}", "%d.%m.%Y"
-                    ).date()
-                else:
-                    task_date = datetime.strptime(date_text, "%d.%m.%Y").date()
-
+                task_date = parse_flexible_date(t_info["date"])
                 if task_date >= today:
                     filtered_global.append(t_info)
                 else:
@@ -242,8 +247,7 @@ def callback_query(call):
 
         clean_old_homeworks(user_id)
 
-        tomorrow_date = (datetime.now() + timedelta(days=1)).strftime("%d.%m.%Y")
-        tomorrow_date_short = (datetime.now() + timedelta(days=1)).strftime("%d.%m")
+        tomorrow_date_obj = datetime.now().date() + timedelta(days=1)
 
         text = "📌 **Домашняя работа на завтра:**\n\n"
         has_tomorrow_tasks = False
@@ -251,12 +255,14 @@ def callback_query(call):
 
         for subj, tasks in user_data[user_id]["active"].items():
             for i, t_info in enumerate(tasks, 1):
-                task_date = t_info["date"].strip()
-                if task_date in [
-                    tomorrow_date,
-                    tomorrow_date_short,
+                try:
+                    task_date_obj = parse_flexible_date(t_info["date"])
+                    is_tomorrow = task_date_obj == tomorrow_date_obj
+                except ValueError:
+                    is_tomorrow = False
+
+                if is_tomorrow or t_info["date"].strip().lower() in [
                     "завтра",
-                    "Завтра",
                 ]:
                     has_tomorrow_tasks = True
                     text += f"🔹 **Предмет**: {subj}\n"
@@ -334,7 +340,7 @@ def callback_query(call):
                     text += f"📝 **Задание**: {t_info['text']}\n\n"
                     markup.row(
                         types.InlineKeyboardButton(
-                            f"↩️ Вернуть: {subj} ({i})",
+                            f"↩️️ Вернуть: {subj} ({i})",
                             callback_data=f"undone_{subj}_{i - 1}",
                         )
                     )
@@ -460,7 +466,7 @@ def callback_query(call):
         markup = types.InlineKeyboardMarkup()
         markup.row(types.InlineKeyboardButton("🏠 На главную", callback_data="go_home"))
 
-        prompt_text = f"📅 Введи **дату сдачи** для предмета **{selected_subject}** (например, `30.09.2026` или `30.09`):"
+        prompt_text = f"📅 Введи **дату сдачи** для предмета **{selected_subject}** (можно без нулей, например `9.9` или `9.9.2026`):"
         bot.edit_message_text(
             prompt_text,
             chat_id,
@@ -614,13 +620,7 @@ def handle_text(message):
         date_text = text.strip()
 
         try:
-            current_year = datetime.now().year
-            if len(date_text.split(".")) == 2:
-                parsed_date = datetime.strptime(
-                    f"{date_text}.{current_year}", "%d.%m.%Y"
-                ).date()
-            else:
-                parsed_date = datetime.strptime(date_text, "%d.%m.%Y").date()
+            parsed_date = parse_flexible_date(date_text)
 
             if parsed_date < datetime.now().date():
                 error_text = "❌ **Ошибка!** Нельзя добавить домашку на прошедший день. Введите актуальную дату:"
@@ -649,7 +649,7 @@ def handle_text(message):
                 return
 
         except ValueError:
-            error_text = "❌ **Неверный формат даты.** Введите в формате `ДД.ММ.ГГГГ` или `ДД.ММ`:"
+            error_text = "❌ **Неверный формат даты.** Введите в формате `ДД.ММ.ГГГГ` или `ДД.ММ` (можно без нулей):"
             markup = types.InlineKeyboardMarkup()
             markup.row(
                 types.InlineKeyboardButton("🏠 На главную", callback_data="go_home")
