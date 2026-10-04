@@ -250,32 +250,39 @@ def callback_query(call):
         tomorrow_date_obj = datetime.now().date() + timedelta(days=1)
 
         text = "📌 **Домашняя работа на завтра:**\n\n"
-        has_tomorrow_tasks = False
         markup = types.InlineKeyboardMarkup()
-
+        
+        tomorrow_tasks = []
         for subj, tasks in user_data[user_id]["active"].items():
-            for i, t_info in enumerate(tasks, 1):
+            for i, t_info in enumerate(tasks):
                 try:
                     task_date_obj = parse_flexible_date(t_info["date"])
                     is_tomorrow = task_date_obj == tomorrow_date_obj
                 except ValueError:
                     is_tomorrow = False
 
-                if is_tomorrow or t_info["date"].strip().lower() in [
-                    "завтра",
-                ]:
-                    has_tomorrow_tasks = True
-                    text += f"🔹 **Предмет**: {subj}\n"
-                    text += f"📅 **Дата**: {t_info['date']}\n"
-                    text += f"📝 **Задание**: {t_info['text']}\n\n"
-                    markup.row(
-                        types.InlineKeyboardButton(
-                            f"✅ Сделано: {subj} ({i})",
-                            callback_data=f"done_tom_{subj}_{i - 1}",
-                        )
-                    )
+                if is_tomorrow or t_info["date"].strip().lower() in ["завтра"]:
+                    tomorrow_tasks.append({
+                        "subj": subj,
+                        "index": i,
+                        "date": t_info["date"],
+                        "text": t_info["text"]
+                    })
 
-        if not has_tomorrow_tasks:
+        if tomorrow_tasks:
+            for item in tomorrow_tasks:
+                subj = item["subj"]
+                idx = item["index"]
+                text += f"🔹 **Предмет**: {subj}\n"
+                text += f"📅 **Дата**: {item['date']}\n"
+                text += f"📝 **Задание**: {item['text']}\n\n"
+                markup.row(
+                    types.InlineKeyboardButton(
+                        f"✅ Сделано: {subj}",
+                        callback_data=f"done_tom_{subj}_{idx}",
+                    )
+                )
+        else:
             text = "📌 **Домашняя работа на завтра:**\n\nНа завтра заданий нет! Отдыхай 🎉"
 
         markup.row(types.InlineKeyboardButton("🏠 На главную", callback_data="go_home"))
@@ -373,32 +380,39 @@ def callback_query(call):
         if is_tomorrow_view:
             tomorrow_date_obj = datetime.now().date() + timedelta(days=1)
             text = "📌 **Домашняя работа на завтра:**\n\n"
-            has_tomorrow_tasks = False
             markup = types.InlineKeyboardMarkup()
 
+            tomorrow_tasks = []
             for subj, tasks in user_data[user_id]["active"].items():
-                for i, t_info in enumerate(tasks, 1):
+                for i, t_info in enumerate(tasks):
                     try:
                         task_date_obj = parse_flexible_date(t_info["date"])
                         is_tomorrow = task_date_obj == tomorrow_date_obj
                     except ValueError:
                         is_tomorrow = False
 
-                    if is_tomorrow or t_info["date"].strip().lower() in [
-                        "завтра",
-                    ]:
-                        has_tomorrow_tasks = True
-                        text += f"🔹 **Предмет**: {subj}\n"
-                        text += f"📅 **Дата**: {t_info['date']}\n"
-                        text += f"📝 **Задание**: {t_info['text']}\n\n"
-                        markup.row(
-                            types.InlineKeyboardButton(
-                                f"✅ Сделано: {subj} ({i})",
-                                callback_data=f"done_tom_{subj}_{i - 1}",
-                            )
-                        )
+                    if is_tomorrow or t_info["date"].strip().lower() in ["завтра"]:
+                        tomorrow_tasks.append({
+                            "subj": subj,
+                            "index": i,
+                            "date": t_info["date"],
+                            "text": t_info["text"]
+                        })
 
-            if not has_tomorrow_tasks:
+            if tomorrow_tasks:
+                for item in tomorrow_tasks:
+                    subj = item["subj"]
+                    idx = item["index"]
+                    text += f"🔹 **Предмет**: {subj}\n"
+                    text += f"📅 **Дата**: {item['date']}\n"
+                    text += f"📝 **Задание**: {item['text']}\n\n"
+                    markup.row(
+                        types.InlineKeyboardButton(
+                            f"✅ Сделано: {subj}",
+                            callback_data=f"done_tom_{subj}_{idx}",
+                        )
+                    )
+            else:
                 text = "📌 **Домашняя работа на завтра:**\n\nНа завтра заданий нет! Отдыхай 🎉"
 
             markup.row(
@@ -797,4 +811,3 @@ if __name__ == "__main__":
     keep_alive()
     print("Бот и веб-сервер запущены...")
     bot.infinity_polling(skip_pending=True)
-    
