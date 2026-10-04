@@ -271,7 +271,7 @@ def callback_query(call):
                     markup.row(
                         types.InlineKeyboardButton(
                             f"✅ Сделано: {subj} ({i})",
-                            callback_data=f"done_{subj}_{i - 1}",
+                            callback_data=f"done_tom_{subj}_{i - 1}",
                         )
                     )
 
@@ -311,7 +311,7 @@ def callback_query(call):
                     markup.row(
                         types.InlineKeyboardButton(
                             f"✅ Сделано: {subj} ({i})",
-                            callback_data=f"done_{subj}_{i - 1}",
+                            callback_data=f"done_all_{subj}_{i - 1}",
                         )
                     )
 
@@ -340,7 +340,7 @@ def callback_query(call):
                     text += f"📝 **Задание**: {t_info['text']}\n\n"
                     markup.row(
                         types.InlineKeyboardButton(
-                            f"↩️️ Вернуть: {subj} ({i})",
+                            f"↩ Вернуть: {subj} ({i})",
                             callback_data=f"undone_{subj}_{i - 1}",
                         )
                     )
@@ -353,9 +353,12 @@ def callback_query(call):
             text, chat_id, message_id, reply_markup=markup, parse_mode="Markdown"
         )
 
-    elif call.data.startswith("done_"):
+    elif call.data.startswith("done_all_") or call.data.startswith("done_tom_"):
+        is_tomorrow_view = call.data.startswith("done_tom_")
+        prefix = "done_tom_" if is_tomorrow_view else "done_all_"
+
         bot.answer_callback_query(call.id, "Задание выполнено! ✅")
-        parts = call.data.replace("done_", "").rsplit("_", 1)
+        parts = call.data.replace(prefix, "").rsplit("_", 1)
         if len(parts) == 2:
             subj = parts[0]
             try:
@@ -367,30 +370,71 @@ def callback_query(call):
             except ValueError:
                 pass
 
-        text = "📚 **Всё актуальное домашнее задание:**\n\n"
-        has_tasks = False
-        markup = types.InlineKeyboardMarkup()
+        if is_tomorrow_view:
+            tomorrow_date_obj = datetime.now().date() + timedelta(days=1)
+            text = "📌 **Домашняя работа на завтра:**\n\n"
+            has_tomorrow_tasks = False
+            markup = types.InlineKeyboardMarkup()
 
-        for s, tasks in user_data[user_id]["active"].items():
-            if tasks:
-                has_tasks = True
+            for subj, tasks in user_data[user_id]["active"].items():
                 for i, t_info in enumerate(tasks, 1):
-                    text += f"🔹 **Предмет**: {s}\n"
-                    text += f"📅 **Дата**: {t_info['date']}\n"
-                    text += f"📝 **Задание**: {t_info['text']}\n\n"
-                    markup.row(
-                        types.InlineKeyboardButton(
-                            f"✅ Сделано: {s} ({i})", callback_data=f"done_{s}_{i - 1}"
+                    try:
+                        task_date_obj = parse_flexible_date(t_info["date"])
+                        is_tomorrow = task_date_obj == tomorrow_date_obj
+                    except ValueError:
+                        is_tomorrow = False
+
+                    if is_tomorrow or t_info["date"].strip().lower() in [
+                        "завтра",
+                    ]:
+                        has_tomorrow_tasks = True
+                        text += f"🔹 **Предмет**: {subj}\n"
+                        text += f"📅 **Дата**: {t_info['date']}\n"
+                        text += f"📝 **Задание**: {t_info['text']}\n\n"
+                        markup.row(
+                            types.InlineKeyboardButton(
+                                f"✅ Сделано: {subj} ({i})",
+                                callback_data=f"done_tom_{subj}_{i - 1}",
+                            )
                         )
-                    )
 
-        if not has_tasks:
-            text = "📚 **Всё домашнее задание:**\n\nУра! Все задания выполнены 🎉"
+            if not has_tomorrow_tasks:
+                text = "📌 **Домашняя работа на завтра:**\n\nНа завтра заданий нет! Отдыхай 🎉"
 
-        markup.row(types.InlineKeyboardButton("🏠 На главную", callback_data="go_home"))
-        bot.edit_message_text(
-            text, chat_id, message_id, reply_markup=markup, parse_mode="Markdown"
-        )
+            markup.row(
+                types.InlineKeyboardButton("🏠 На главную", callback_data="go_home")
+            )
+            bot.edit_message_text(
+                text, chat_id, message_id, reply_markup=markup, parse_mode="Markdown"
+            )
+        else:
+            text = "📚 **Всё актуальное домашнее задание:**\n\n"
+            has_tasks = False
+            markup = types.InlineKeyboardMarkup()
+
+            for s, tasks in user_data[user_id]["active"].items():
+                if tasks:
+                    has_tasks = True
+                    for i, t_info in enumerate(tasks, 1):
+                        text += f"🔹 **Предмет**: {s}\n"
+                        text += f"📅 **Дата**: {t_info['date']}\n"
+                        text += f"📝 **Задание**: {t_info['text']}\n\n"
+                        markup.row(
+                            types.InlineKeyboardButton(
+                                f"✅ Сделано: {s} ({i})",
+                                callback_data=f"done_all_{s}_{i - 1}",
+                            )
+                        )
+
+            if not has_tasks:
+                text = "📚 **Всё домашнее задание:**\n\nУра! Все задания выполнены 🎉"
+
+            markup.row(
+                types.InlineKeyboardButton("🏠 На главную", callback_data="go_home")
+            )
+            bot.edit_message_text(
+                text, chat_id, message_id, reply_markup=markup, parse_mode="Markdown"
+            )
 
     elif call.data.startswith("undone_"):
         bot.answer_callback_query(call.id, "Задание возвращено в активные! ↩️")
@@ -419,7 +463,8 @@ def callback_query(call):
                     text += f"📝 **Задание**: {t_info['text']}\n\n"
                     markup.row(
                         types.InlineKeyboardButton(
-                            f"↩️ Вернуть: {s} ({i})", callback_data=f"undone_{s}_{i - 1}"
+                            f"↩️ Вернуть: {s} ({i})",
+                            callback_data=f"undone_{s}_{i - 1}",
                         )
                     )
 
@@ -446,7 +491,9 @@ def callback_query(call):
                     types.InlineKeyboardButton(subj2, callback_data=f"sub_{subj2}"),
                 )
             except StopIteration:
-                markup.add(types.InlineKeyboardButton(subj1, callback_data=f"sub_{subj1}"))
+                markup.add(
+                    types.InlineKeyboardButton(subj1, callback_data=f"sub_{subj1}")
+                )
 
         markup.row(types.InlineKeyboardButton("🏠 На главную", callback_data="go_home"))
         bot.edit_message_text(
@@ -490,7 +537,8 @@ def callback_query(call):
                     text += f"🔹 **{subj}** ({t_info['date']}): {t_info['text']}\n"
                     markup.row(
                         types.InlineKeyboardButton(
-                            f"❌ Удалить: {subj} ({i})", callback_data=f"del_{subj}_{i - 1}"
+                            f"❌ Удалить: {subj} ({i})",
+                            callback_data=f"del_{subj}_{i - 1}",
                         )
                     )
 
@@ -540,7 +588,8 @@ def callback_query(call):
                     text += f"🔹 **{subj}** ({t_info['date']}): {t_info['text']}\n"
                     markup.row(
                         types.InlineKeyboardButton(
-                            f"❌ Удалить: {subj} ({i})", callback_data=f"del_{subj}_{i - 1}"
+                            f"❌ Удалить: {subj} ({i})",
+                            callback_data=f"del_{subj}_{i - 1}",
                         )
                     )
 
@@ -748,3 +797,4 @@ if __name__ == "__main__":
     keep_alive()
     print("Бот и веб-сервер запущены...")
     bot.infinity_polling(skip_pending=True)
+    
