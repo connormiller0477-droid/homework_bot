@@ -5,6 +5,7 @@ import telebot
 from telebot import types
 import numpy as np
 import cv2
+import json
 
 # Импортируем официальную библиотеку Google GenAI
 from google import genai
@@ -217,10 +218,14 @@ def clean_old_homeworks(user_id):
 
 
 def analyze_images_with_gemini(photo_bytes_list):
-    """Отправляем скриншоты в Gemini для интеллектуального извлечения домашнего задания."""
+    """Отправляем скриншоты в Gemini для интеллектуального извлечения домашнего задания с отладкой."""
+    print("--- ЗАПУСК АНАЛИЗА GEMINI ---")
+    
     if not client:
-        print("Ошибка: Клиент Gemini не инициализирован (нет ключа).")
+        print("❌ ОШИБКА: Клиент Gemini равен None! Переменная GEMINI_API_KEY на Render не найдена или пуста.")
         return []
+    else:
+        print("✅ Клиент Gemini успешно инициализирован.")
 
     contents = []
     for b in photo_bytes_list:
@@ -232,33 +237,48 @@ def analyze_images_with_gemini(photo_bytes_list):
         )
 
     prompt = f"""
-    Проанализируй скриншоты школьного электронного дневника. 
-    Найди все домашние задания, указанные на них.
-    Доступные предметы: {", ".join(subjects_list)}.
-    Для каждого задания определи:
-    1. Точное название предмета из списка выше.
-    2. Дату выполнения/сдачи в формате ДД.ММ.ГГГГ (текущий год 2026). Если дата написана как "19 октября", переведи её в 19.10.2026.
-    3. Полный текст домашнего задания.
-    Верни ответ СТРОГО в виде списка словарей Python (без лишнего текста и markdown-оберток вроде ```python):
+    Проанализируй скриншоты школьного электронного дневника.
+    Найди все домашние задания.
+
+    Список доступных предметов в системе:
+    {", ".join(subjects_list)}
+
+    Инструкции по разбору:
+    1. Предмет: Найди название предмета и приведи его к ТОЧНОМУ названию из списка выше (например, "Вероятность и статистика").
+    2. Дата: Найди дату сдачи задания (например, "на четверг, 22 октября"). Переведи её в формат ДД.ММ.ГГГГ (текущий год 2026, например "22.10.2026"). Не путай с датой публикации!
+    3. Задание: Извлеки текст задания (например, "повторить № 10 огэ."). Игнорируй тему урока.
+
+    Верни ответ СТРОГО в формате JSON без какого-либо другого текста, разметки или пояснений:
     [
-      {{"subject": "Физика", "date": "19.10.2026", "text": "Упр. 9 (1-5)"}},
-      {{"subject": "Русский язык", "date": "19.10.2026", "text": "П.10, выучить правила"}}
+      {{"subject": "Вероятность и статистика", "date": "22.10.2026", "text": "повторить № 10 огэ."}}
     ]
-    Если заданий не найдено, верни пустой список: []
+
+    Если заданий не найдено, верни: []
     """
     contents.append(prompt)
 
     try:
+        print("⏳ Отправка запроса в Gemini API...")
         response = client.models.generate_content(
             model='gemini-2.5-flash',
             contents=contents,
         )
-        cleaned_text = response.text.strip().replace("```python", "").replace("```", "").strip()
-        tasks = eval(cleaned_text)
+        print(f"📥 ОТВЕТ ОТ GEMINI (RAW):\n{response.text}")
+
+        cleaned_text = response.text.strip()
+        if "```" in cleaned_text:
+            cleaned_text = cleaned_text.split("```")[1]
+            if cleaned_text.startswith("json"):
+                cleaned_text = cleaned_text[4:]
+        cleaned_text = cleaned_text.strip()
+
+        tasks = json.loads(cleaned_text)
         if isinstance(tasks, list):
+            print(f"✅ Успешно распарсено заданий: {len(tasks)}")
             return tasks
     except Exception as e:
-        print(f"Ошибка при запросе к Gemini API: {e}")
+        print(f"❌ ОШИБКА при запросе или обработке ответа Gemini: {e}")
+
     return []
 
 
