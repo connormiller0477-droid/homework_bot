@@ -1,2 +1,4 @@
 pyTelegramBotAPI
-flask
+google-genai
+numpy
+opencv-python-headless
