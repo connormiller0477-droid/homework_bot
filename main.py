@@ -37,8 +37,13 @@ threading.Thread(target=run_web_server, daemon=True).start()
 TOKEN = "8797963662:AAGi6DZhW6Fl3bWwGMELIluOsx7F0xw0JdI"
 bot = telebot.TeleBot(TOKEN)
 
-# Инициализируем клиент Gemini API через защищенную переменную окружения Render
-client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
+# Безопасная инициализация клиента Gemini API через переменную окружения Render
+gemini_key = os.environ.get("GEMINI_API_KEY")
+if gemini_key:
+    client = genai.Client(api_key=gemini_key)
+else:
+    print("ВНИМАНИЕ: Переменная GEMINI_API_KEY не задана в Environment Variables!")
+    client = None
 
 DB_FILE = "homework.db"
 
@@ -213,6 +218,10 @@ def clean_old_homeworks(user_id):
 
 def analyze_images_with_gemini(photo_bytes_list):
     """Отправляем скриншоты в Gemini для интеллектуального извлечения домашнего задания."""
+    if not client:
+        print("Ошибка: Клиент Gemini не инициализирован (нет ключа).")
+        return []
+
     contents = []
     for b in photo_bytes_list:
         contents.append(
@@ -241,7 +250,7 @@ def analyze_images_with_gemini(photo_bytes_list):
 
     try:
         response = client.models.generate_content(
-            model='gemini-3.8-flash',
+            model='gemini-2.5-flash',
             contents=contents,
         )
         cleaned_text = response.text.strip().replace("```python", "").replace("```", "").strip()
