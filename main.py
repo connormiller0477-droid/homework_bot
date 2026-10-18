@@ -10,6 +10,25 @@ import cv2
 from google import genai
 from google.genai import types as genai_types
 
+# --- МИНИ-СЕРВЕР ДЛЯ РЕНДЕРА (ОТКРЫВАЕТ ПОРТ ДЛЯ БЕСПЛАТНОГО WEB SERVICE) ---
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
+
+class SimpleHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"Bot is running!")
+
+def run_web_server():
+    port = int(os.environ.get("PORT", 10000))
+    server = HTTPServer(('0.0.0.0', port), SimpleHandler)
+    server.serve_forever()
+
+# Запускаем веб-сервер в отдельном потоке, чтобы он не мешал работе бота
+threading.Thread(target=run_web_server, daemon=True).start()
+# -------------------------------------------------------------------------
+
 # Токен твоего Telegram-бота
 TOKEN = "8797963662:AAGi6DZhW6Fl3bWwGMELIluOsx7F0xw0JdI"
 bot = telebot.TeleBot(TOKEN)
@@ -191,7 +210,6 @@ def clean_old_homeworks(user_id):
 def analyze_images_with_gemini(photo_bytes_list):
     """Отправляем скриншоты в Gemini для интеллектуального извлечения домашнего задания."""
     contents = []
-
     for b in photo_bytes_list:
         contents.append(
             genai_types.Part.from_bytes(
@@ -204,12 +222,10 @@ def analyze_images_with_gemini(photo_bytes_list):
     Проанализируй скриншоты школьного электронного дневника. 
     Найди все домашние задания, указанные на них.
     Доступные предметы: {", ".join(subjects_list)}.
-
     Для каждого задания определи:
     1. Точное название предмета из списка выше.
     2. Дату выполнения/сдачи в формате ДД.ММ.ГГГГ (текущий год 2026). Если дата написана как "19 октября", переведи её в 19.10.2026.
     3. Полный текст домашнего задания.
-
     Верни ответ СТРОГО в виде списка словарей Python (без лишнего текста и markdown-оберток вроде ```python):
     [
       {{"subject": "Физика", "date": "19.10.2026", "text": "Упр. 9 (1-5)"}},
@@ -224,21 +240,18 @@ def analyze_images_with_gemini(photo_bytes_list):
             model='gemini-3.8-flash',
             contents=contents,
         )
-
         cleaned_text = response.text.strip().replace("```python", "").replace("```", "").strip()
         tasks = eval(cleaned_text)
         if isinstance(tasks, list):
             return tasks
     except Exception as e:
         print(f"Ошибка при запросе к Gemini API: {e}")
-
     return []
 
 
 def show_ocr_results(chat_id, message_id, user_id):
     parsed_tasks = user_data[user_id].get("ocr_parsed_tasks", [])
     markup = types.InlineKeyboardMarkup()
-
     if parsed_tasks:
         text = "🤖 **Нейросеть проанализировала скриншоты и нашла задания:**\n\n"
         for idx, item in enumerate(parsed_tasks):
@@ -246,14 +259,12 @@ def show_ocr_results(chat_id, message_id, user_id):
             text += f"  <b>Дата:</b> {item['date']}\n"
             text += f"  <b>Задание:</b> {item['text']}\n\n"
             markup.row(types.InlineKeyboardButton(f"✏️ Изменить текст #{idx + 1}", callback_data=f"edit_ocr_{idx}"))
-
         text += "Всё верно? Нажми кнопку ниже, чтобы автоматически занести их в базу."
         markup.row(types.InlineKeyboardButton("✅ Подтвердить и сохранить", callback_data="confirm_ocr_save"))
     else:
         text = "❌ Нейросеть не смогла обнаружить задания на скриншотах. Попробуй добавить ДЗ вручную через меню."
 
     markup.row(types.InlineKeyboardButton("🏠 На главную", callback_data="go_home"))
-
     try:
         bot.edit_message_text(text, chat_id, message_id, parse_mode="HTML", reply_markup=markup)
     except Exception:
@@ -299,15 +310,15 @@ def callback_query(call):
     message_id = call.message.message_id
 
     if (
-            not call.data.startswith("done_")
-            and not call.data.startswith("undone_")
-            and not call.data.startswith("sub_")
-            and not call.data.startswith("del_")
-            and not call.data.startswith("set_eng_")
-            and not call.data.startswith("show_file_")
-            and not call.data.startswith("file_done_")
-            and not call.data.startswith("edit_ocr_")
-            and call.data not in ["start_ocr_process", "confirm_ocr_save"]
+        not call.data.startswith("done_")
+        and not call.data.startswith("undone_")
+        and not call.data.startswith("sub_")
+        and not call.data.startswith("del_")
+        and not call.data.startswith("set_eng_")
+        and not call.data.startswith("show_file_")
+        and not call.data.startswith("file_done_")
+        and not call.data.startswith("edit_ocr_")
+        and call.data not in ["start_ocr_process", "confirm_ocr_save"]
     ):
         user_data[user_id]["target_subject"] = None
         user_data[user_id]["step"] = None
@@ -357,14 +368,13 @@ def callback_query(call):
 
                 file_id = task_info.get("file_id")
                 file_type = task_info.get("file_type")
-
+                
                 caption = f"Предмет: {subj}\nДата: {task_info['date']}\nЗадание: {task_info['text']}"
 
                 short_subj = subj.replace("Английский язык", "Англ.")
-                btn_done = types.InlineKeyboardButton(f"✅ Сделано ({short_subj})",
-                                                      callback_data=f"file_done_{subj_idx}_{idx}")
+                btn_done = types.InlineKeyboardButton(f"✅ Сделано ({short_subj})", callback_data=f"file_done_{subj_idx}_{idx}")
                 btn_back = types.InlineKeyboardButton("🔙 К списку Д/З", callback_data="btn_all_hw")
-
+                
                 markup = types.InlineKeyboardMarkup()
                 markup.row(btn_done, btn_back)
 
@@ -410,7 +420,7 @@ def callback_query(call):
             bot.delete_message(chat_id, message_id)
         except Exception:
             pass
-
+        
         call.data = "btn_all_hw"
         callback_query(call)
         return
@@ -441,7 +451,7 @@ def callback_query(call):
         parsed_tasks = analyze_images_with_gemini(photo_bytes_list)
 
         user_data[user_id]["ocr_parsed_tasks"] = parsed_tasks
-
+        
         show_ocr_results(chat_id, message_id, user_id)
         return
 
@@ -468,9 +478,7 @@ def callback_query(call):
 
         markup = types.InlineKeyboardMarkup()
         markup.row(types.InlineKeyboardButton("🏠 На главную", callback_data="go_home"))
-        bot.edit_message_text(
-            f"✅ Успешно добавлено заданий: {len(tasks_to_add)}!\n\nВсе ученики уже видят обновлённое ДЗ.", chat_id,
-            message_id, reply_markup=markup)
+        bot.edit_message_text(f"✅ Успешно добавлено заданий: {len(tasks_to_add)}!\n\nВсе ученики уже видят обновлённое ДЗ.", chat_id, message_id, reply_markup=markup)
         return
 
     if call.data.startswith("set_eng_"):
@@ -580,7 +588,7 @@ def callback_query(call):
             text = "📌 Домашняя работа на завтра:\n\nНа завтра заданий нет! Отдыхай 🎉"
 
         markup.row(types.InlineKeyboardButton("🏠 На главную", callback_data="go_home"))
-
+        
         try:
             bot.edit_message_text(text, chat_id, message_id, reply_markup=markup)
         except Exception:
@@ -657,7 +665,7 @@ def callback_query(call):
             text = "📚 Всё домашнее задание:\n\nУра! Все задания выполнены 🎉"
 
         markup.row(types.InlineKeyboardButton("🏠 На главную", callback_data="go_home"))
-
+        
         try:
             bot.edit_message_text(text, chat_id, message_id, reply_markup=markup)
         except Exception:
@@ -693,12 +701,11 @@ def callback_query(call):
                     text += f"✅ Предмет: {subj}\n"
                     text += f"📅 Дата: {t_info['date']}\n"
                     text += f"📝 Задание: {t_info['text']}\n\n"
-                    markup.row(types.InlineKeyboardButton(f"↩ Вернуть: {subj} ({i})",
-                                                          callback_data=f"undone_{subj_idx}_{i - 1}"))
+                    markup.row(types.InlineKeyboardButton(f"↩ Вернуть: {subj} ({i})", callback_data=f"undone_{subj_idx}_{i - 1}"))
         if not has_completed:
             text = "📁 Выполненное Д/З:\n\nТы пока не отметил ни одного задания как выполненное."
         markup.row(types.InlineKeyboardButton("🏠 На главную", callback_data="go_home"))
-
+        
         try:
             bot.edit_message_text(text, chat_id, message_id, reply_markup=markup)
         except Exception:
@@ -798,8 +805,7 @@ def callback_query(call):
 
                         btn_done = types.InlineKeyboardButton(btn_text, callback_data=f"done_all_{subj_idx}_{i - 1}")
                         if t_info.get("file_id"):
-                            btn_file = types.InlineKeyboardButton("📎 Файл",
-                                                                  callback_data=f"show_file_{subj_idx}_{i - 1}")
+                            btn_file = types.InlineKeyboardButton("📎 Файл", callback_data=f"show_file_{subj_idx}_{i - 1}")
                             markup.row(btn_done, btn_file)
                         else:
                             markup.row(btn_done)
@@ -847,8 +853,7 @@ def callback_query(call):
                     text += f"✅ Предмет: {s}\n"
                     text += f"📅 Дата: {t_info['date']}\n"
                     text += f"📝 Задание: {t_info['text']}\n\n"
-                    markup.row(types.InlineKeyboardButton(f"↩️ Вернуть: {s} ({i})",
-                                                          callback_data=f"undone_{subj_idx}_{i - 1}"))
+                    markup.row(types.InlineKeyboardButton(f"↩️ Вернуть: {s} ({i})", callback_data=f"undone_{subj_idx}_{i - 1}"))
         if not has_completed:
             text = "📁 Выполненное Д/З:\n\nТы пока не отметил ни одного задания как выполненное."
         markup.row(types.InlineKeyboardButton("🏠 На главную", callback_data="go_home"))
@@ -937,8 +942,7 @@ def callback_query(call):
                 for i, t_info in enumerate(tasks, 1):
                     subj_idx = extended_subjects.index(subj)
                     text += f"• {subj} ({t_info['date']}): {t_info['text']}\n"
-                    markup.row(
-                        types.InlineKeyboardButton(f"❌ Удалить: {subj} ({i})", callback_data=f"del_{subj_idx}_{i - 1}"))
+                    markup.row(types.InlineKeyboardButton(f"❌ Удалить: {subj} ({i})", callback_data=f"del_{subj_idx}_{i - 1}"))
         if not has_any_tasks:
             text = "🗑 Удаление ДЗ:\n\nВ базе пока нет активных заданий для удаления."
         markup.row(types.InlineKeyboardButton("🔙 Назад в меню старосты", callback_data="back_to_starosta"))
@@ -979,8 +983,7 @@ def callback_query(call):
                 for i, t_info in enumerate(tasks, 1):
                     subj_idx = extended_subjects.index(subj)
                     text += f"• {subj} ({t_info['date']}): {t_info['text']}\n"
-                    markup.row(
-                        types.InlineKeyboardButton(f"❌ Удалить: {subj} ({i})", callback_data=f"del_{subj_idx}_{i - 1}"))
+                    markup.row(types.InlineKeyboardButton(f"❌ Удалить: {subj} ({i})", callback_data=f"del_{subj_idx}_{i - 1}"))
         if not has_any_tasks:
             text = "🗑 Удаление ДЗ:\n\nВ базе больше нет заданий."
         markup.row(types.InlineKeyboardButton("🔙 Назад в меню старосты", callback_data="back_to_starosta"))
@@ -1035,7 +1038,7 @@ def handle_incoming_content(message):
 
         count = len(user_data[user_id]["ocr_photos"])
         menu_id = user_data[user_id].get("current_msg_id")
-
+        
         markup = types.InlineKeyboardMarkup()
         markup.row(types.InlineKeyboardButton("✅ Готово, запустить анализ", callback_data="start_ocr_process"))
         markup.row(types.InlineKeyboardButton("🏠 На главную", callback_data="go_home"))
@@ -1196,5 +1199,5 @@ def handle_incoming_content(message):
 
 
 if __name__ == "__main__":
-    print("Бот запущен с поддержкой Gemini AI для скриншотов...")
+    print("Бот запущен с поддержкой Gemini AI и мини-сервера для Render...")
     bot.infinity_polling(skip_pending=True, interval=1, timeout=20)
