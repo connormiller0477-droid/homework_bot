@@ -1242,6 +1242,20 @@ def handle_incoming_content(message):
         pass
 
 
-if __name__ == "__main__":
-    print("Бот запущен с поддержкой Gemini AI и мини-сервера для Render...")
+    if __name__ == "__main__":
+    print("Бот запущен с поддержкой Gemini AI...")
+    
+    # ТЕСТОВОЕ ПОДКЛЮЧЕНИЕ К GEMINI ПРИ СТАРТЕ
+    if client:
+        try:
+            test_resp = client.models.generate_content(
+                model='gemini-2.5-flash',
+                contents='Ответь словом "ОК", если видишь этот запрос'
+            )
+            print(f"ТЕСТ GEMINI API УСПЕШЕН: {test_resp.text}")
+        except Exception as err:
+            print(f"ОШИБКА ТЕСТА GEMINI API: {err}")
+    else:
+        print("ТЕСТ ОТМЕНЕН: Ключ GEMINI_API_KEY отсутствует!")
+
     bot.infinity_polling(skip_pending=True, interval=1, timeout=20)
