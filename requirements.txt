@@ -1,4 +1,4 @@
 pyTelegramBotAPI
 google-genai
 numpy
-opencv-python-headless
+Pillow
