@@ -10,22 +10,26 @@ import cv2
 from google import genai
 from google.genai import types as genai_types
 
-# --- МИНИ-СЕРВЕР ДЛЯ РЕНДЕРА (ОТКРЫВАЕТ ПОРТ ДЛЯ БЕСПЛАТНОГО WEB SERVICE) ---
+# --- СТАБИЛЬНЫЙ МИНИ-СЕРВЕР ДЛЯ RENDER (В ОТДЕЛЬНОМ ПОТОКЕ СОКЕТОВ) ---
+import socket
 import threading
-from http.server import HTTPServer, BaseHTTPRequestHandler
-
-class SimpleHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.end_headers()
-        self.wfile.write(b"Bot is running!")
 
 def run_web_server():
     port = int(os.environ.get("PORT", 10000))
-    server = HTTPServer(('0.0.0.0', port), SimpleHandler)
-    server.serve_forever()
+    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    server_socket.bind(('0.0.0.0', port))
+    server_socket.listen(5)
+    while True:
+        try:
+            client_socket, _ = server_socket.accept()
+            request = client_socket.recv(1024)
+            response = b"HTTP/1.1 200 OK\r\nContent-Length: 13\r\n\r\nBot is running"
+            client_socket.sendall(response)
+            client_socket.close()
+        except Exception:
+            pass
 
-# Запускаем веб-сервер в отдельном потоке, чтобы он не мешал работе бота
 threading.Thread(target=run_web_server, daemon=True).start()
 # -------------------------------------------------------------------------
 
@@ -265,11 +269,13 @@ def show_ocr_results(chat_id, message_id, user_id):
         text = "❌ Нейросеть не смогла обнаружить задания на скриншотах. Попробуй добавить ДЗ вручную через меню."
 
     markup.row(types.InlineKeyboardButton("🏠 На главную", callback_data="go_home"))
+    
     try:
-        bot.edit_message_text(text, chat_id, message_id, parse_mode="HTML", reply_markup=markup)
+        bot.delete_message(chat_id, message_id)
     except Exception:
-        msg = bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=markup)
-        user_data[user_id]["current_msg_id"] = msg.message_id
+        pass
+    msg = bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=markup)
+    user_data[user_id]["current_msg_id"] = msg.message_id
 
 
 def get_welcome_markup():
@@ -292,6 +298,11 @@ def send_welcome(message):
     user_data[user_id]["temp_date"] = None
     user_data[user_id]["editing_task_idx"] = None
     user_data[user_id]["ocr_photos"] = []
+
+    try:
+        bot.delete_message(message.chat.id, message.message_id)
+    except Exception:
+        pass
 
     msg = bot.send_message(
         message.chat.id,
@@ -340,7 +351,12 @@ def callback_query(call):
             f"Текущий текст:\n<i>{task['text']}</i>\n\n"
             "Отправь новый текст для этого задания:"
         )
-        bot.edit_message_text(prompt_text, chat_id, message_id, parse_mode="HTML", reply_markup=markup)
+        try:
+            bot.delete_message(chat_id, message_id)
+        except Exception:
+            pass
+        msg = bot.send_message(chat_id, prompt_text, parse_mode="HTML", reply_markup=markup)
+        user_data[user_id]["current_msg_id"] = msg.message_id
         return
 
     if call.data == "back_to_ocr_results":
@@ -440,19 +456,28 @@ def callback_query(call):
             "Присылай скриншоты дневника (можно пачкой).\n"
             "Когда отправишь всё, нажми кнопку ниже для анализа нейросетью."
         )
-        bot.edit_message_text(text, chat_id, message_id, reply_markup=markup)
+        try:
+            bot.delete_message(chat_id, message_id)
+        except Exception:
+            pass
+        msg = bot.send_message(chat_id, text, reply_markup=markup)
+        user_data[user_id]["current_msg_id"] = msg.message_id
         return
 
     if call.data == "start_ocr_process":
         bot.answer_callback_query(call.id, "Запускаю нейросеть...")
-        bot.edit_message_text("⏳ Нейросеть изучает скриншоты... Это займет несколько секунд.", chat_id, message_id)
+        try:
+            bot.delete_message(chat_id, message_id)
+        except Exception:
+            pass
+        msg = bot.send_message(chat_id, "⏳ Нейросеть изучает скриншоты... Это займет несколько секунд.")
+        user_data[user_id]["current_msg_id"] = msg.message_id
 
         photo_bytes_list = user_data[user_id].get("ocr_photos", [])
         parsed_tasks = analyze_images_with_gemini(photo_bytes_list)
 
         user_data[user_id]["ocr_parsed_tasks"] = parsed_tasks
-        
-        show_ocr_results(chat_id, message_id, user_id)
+        show_ocr_results(chat_id, msg.message_id, user_id)
         return
 
     if call.data == "confirm_ocr_save":
@@ -473,47 +498,48 @@ def callback_query(call):
                 user_data[uid]["active"][subject].append(task_info)
 
         user_data[user_id]["ocr_parsed_tasks"] = []
-        user_data[user_id]["ocr_photos"] = []  # Очищаем загруженные фото после сохранения
+        user_data[user_id]["ocr_photos"] = []
         bot.answer_callback_query(call.id, "Задания успешно сохранены! 🎉")
 
         markup = types.InlineKeyboardMarkup()
         markup.row(types.InlineKeyboardButton("🏠 На главную", callback_data="go_home"))
-        bot.edit_message_text(f"✅ Успешно добавлено заданий: {len(tasks_to_add)}!\n\nВсе ученики уже видят обновлённое ДЗ.", chat_id, message_id, reply_markup=markup)
+        try:
+            bot.delete_message(chat_id, message_id)
+        except Exception:
+            pass
+        msg = bot.send_message(chat_id, f"✅ Успешно добавлено заданий: {len(tasks_to_add)}!\n\nВсе ученики уже видят обновлённое ДЗ.", reply_markup=markup)
+        user_data[user_id]["current_msg_id"] = msg.message_id
         return
 
     if call.data.startswith("set_eng_"):
         bot.answer_callback_query(call.id, "Группа сохранена! ✅")
         teacher = call.data.replace("set_eng_", "")
         user_data[user_id]["eng_group"] = teacher
-        bot.edit_message_text(
-            f"🇬🇧 Отлично! Твоя группа по английскому: {teacher}.\n\nТеперь выбери нужное действие:",
+        try:
+            bot.delete_message(chat_id, message_id)
+        except Exception:
+            pass
+        msg = bot.send_message(
             chat_id,
-            message_id,
+            f"🇬🇧 Отлично! Твоя группа по английскому: {teacher}.\n\nТеперь выбери нужное действие:",
             reply_markup=get_welcome_markup(),
         )
+        user_data[user_id]["current_msg_id"] = msg.message_id
         return
 
     if call.data == "go_home":
         bot.answer_callback_query(call.id)
-        user_data[user_id]["ocr_photos"] = []  # Очищаем буфер фото при возврате
+        user_data[user_id]["ocr_photos"] = []
         try:
-            bot.edit_message_text(
-                "Добро пожаловать!👋\n\nЭто проводник по домашнему заданию. Что тебя интересует?📚",
-                chat_id,
-                message_id,
-                reply_markup=get_welcome_markup(),
-            )
+            bot.delete_message(chat_id, message_id)
         except Exception:
-            try:
-                bot.delete_message(chat_id, message_id)
-            except Exception:
-                pass
-            msg = bot.send_message(
-                chat_id,
-                "Добро пожаловать!👋\n\nЭто проводник по домашнему заданию. Что тебя интересует?📚",
-                reply_markup=get_welcome_markup(),
-            )
-            user_data[user_id]["current_msg_id"] = msg.message_id
+            pass
+        msg = bot.send_message(
+            chat_id,
+            "Добро пожаловать!👋\n\nЭто проводник по домашнему заданию. Что тебя интересует?📚",
+            reply_markup=get_welcome_markup(),
+        )
+        user_data[user_id]["current_msg_id"] = msg.message_id
 
     elif call.data == "btn_tomorrow":
         if user_data[user_id]["eng_group"] is None:
@@ -524,12 +550,16 @@ def callback_query(call):
                 types.InlineKeyboardButton("👩‍🏫 Лариса Николаевна", callback_data="set_eng_Лариса Николаевна")
             )
             markup.row(types.InlineKeyboardButton("🏠 На главную", callback_data="go_home"))
-            bot.edit_message_text(
-                "🇬🇧 Укажи свою группу по английскому языку перед просмотром ДЗ:",
+            try:
+                bot.delete_message(chat_id, message_id)
+            except Exception:
+                pass
+            msg = bot.send_message(
                 chat_id,
-                message_id,
+                "🇬🇧 Укажи свою группу по английскому языку перед просмотром ДЗ:",
                 reply_markup=markup,
             )
+            user_data[user_id]["current_msg_id"] = msg.message_id
             return
 
         bot.answer_callback_query(call.id)
@@ -590,14 +620,11 @@ def callback_query(call):
         markup.row(types.InlineKeyboardButton("🏠 На главную", callback_data="go_home"))
         
         try:
-            bot.edit_message_text(text, chat_id, message_id, reply_markup=markup)
+            bot.delete_message(chat_id, message_id)
         except Exception:
-            try:
-                bot.delete_message(chat_id, message_id)
-            except Exception:
-                pass
-            msg = bot.send_message(chat_id, text, reply_markup=markup)
-            user_data[user_id]["current_msg_id"] = msg.message_id
+            pass
+        msg = bot.send_message(chat_id, text, reply_markup=markup)
+        user_data[user_id]["current_msg_id"] = msg.message_id
 
     elif call.data == "btn_all_hw":
         if user_data[user_id]["eng_group"] is None:
@@ -608,12 +635,16 @@ def callback_query(call):
                 types.InlineKeyboardButton("👩‍🏫 Лариса Николаевна", callback_data="set_eng_Лариса Николаевна")
             )
             markup.row(types.InlineKeyboardButton("🏠 На главную", callback_data="go_home"))
-            bot.edit_message_text(
-                "🇬🇧 Укажи свою группу по английскому языку перед просмотром ДЗ:",
+            try:
+                bot.delete_message(chat_id, message_id)
+            except Exception:
+                pass
+            msg = bot.send_message(
                 chat_id,
-                message_id,
+                "🇬🇧 Укажи свою группу по английскому языку перед просмотром ДЗ:",
                 reply_markup=markup,
             )
+            user_data[user_id]["current_msg_id"] = msg.message_id
             return
 
         bot.answer_callback_query(call.id)
@@ -667,14 +698,11 @@ def callback_query(call):
         markup.row(types.InlineKeyboardButton("🏠 На главную", callback_data="go_home"))
         
         try:
-            bot.edit_message_text(text, chat_id, message_id, reply_markup=markup)
+            bot.delete_message(chat_id, message_id)
         except Exception:
-            try:
-                bot.delete_message(chat_id, message_id)
-            except Exception:
-                pass
-            msg = bot.send_message(chat_id, text, reply_markup=markup)
-            user_data[user_id]["current_msg_id"] = msg.message_id
+            pass
+        msg = bot.send_message(chat_id, text, reply_markup=markup)
+        user_data[user_id]["current_msg_id"] = msg.message_id
 
     elif call.data == "btn_done":
         bot.answer_callback_query(call.id)
@@ -707,14 +735,11 @@ def callback_query(call):
         markup.row(types.InlineKeyboardButton("🏠 На главную", callback_data="go_home"))
         
         try:
-            bot.edit_message_text(text, chat_id, message_id, reply_markup=markup)
+            bot.delete_message(chat_id, message_id)
         except Exception:
-            try:
-                bot.delete_message(chat_id, message_id)
-            except Exception:
-                pass
-            msg = bot.send_message(chat_id, text, reply_markup=markup)
-            user_data[user_id]["current_msg_id"] = msg.message_id
+            pass
+        msg = bot.send_message(chat_id, text, reply_markup=markup)
+        user_data[user_id]["current_msg_id"] = msg.message_id
 
     elif call.data.startswith("done_all_") or call.data.startswith("done_tom_"):
         is_tomorrow_view = call.data.startswith("done_tom_")
@@ -780,7 +805,12 @@ def callback_query(call):
                 text = "📌 Домашняя работа на завтра:\n\nНа завтра заданий нет! Отдыхай 🎉"
 
             markup.row(types.InlineKeyboardButton("🏠 На главную", callback_data="go_home"))
-            bot.edit_message_text(text, chat_id, message_id, reply_markup=markup)
+            try:
+                bot.delete_message(chat_id, message_id)
+            except Exception:
+                pass
+            msg = bot.send_message(chat_id, text, reply_markup=markup)
+            user_data[user_id]["current_msg_id"] = msg.message_id
         else:
             text = "📚 Всё актуальное домашнее задание:\n\n"
             has_tasks = False
@@ -814,7 +844,12 @@ def callback_query(call):
                 text = "📚 Всё домашнее задание:\n\nУра! Все задания выполнены 🎉"
 
             markup.row(types.InlineKeyboardButton("🏠 На главную", callback_data="go_home"))
-            bot.edit_message_text(text, chat_id, message_id, reply_markup=markup)
+            try:
+                bot.delete_message(chat_id, message_id)
+            except Exception:
+                pass
+            msg = bot.send_message(chat_id, text, reply_markup=markup)
+            user_data[user_id]["current_msg_id"] = msg.message_id
 
     elif call.data.startswith("undone_"):
         bot.answer_callback_query(call.id, "Задание возвращено в активные! ↩️")
@@ -857,7 +892,12 @@ def callback_query(call):
         if not has_completed:
             text = "📁 Выполненное Д/З:\n\nТы пока не отметил ни одного задания как выполненное."
         markup.row(types.InlineKeyboardButton("🏠 На главную", callback_data="go_home"))
-        bot.edit_message_text(text, chat_id, message_id, reply_markup=markup)
+        try:
+            bot.delete_message(chat_id, message_id)
+        except Exception:
+            pass
+        msg = bot.send_message(chat_id, text, reply_markup=markup)
+        user_data[user_id]["current_msg_id"] = msg.message_id
 
     elif call.data == "choose_subject":
         bot.answer_callback_query(call.id)
@@ -879,12 +919,16 @@ def callback_query(call):
                 idx1 = subjects_list.index(subj1)
                 markup.add(types.InlineKeyboardButton(subj1, callback_data=f"sub_{idx1}"))
         markup.row(types.InlineKeyboardButton("🏠 На главную", callback_data="go_home"))
-        bot.edit_message_text(
-            "📚 Выбери предмет, для которого хочешь записать Д/З:",
+        try:
+            bot.delete_message(chat_id, message_id)
+        except Exception:
+            pass
+        msg = bot.send_message(
             chat_id,
-            message_id,
+            "📚 Выбери предмет, для которого хочешь записать Д/З:",
             reply_markup=markup,
         )
+        user_data[user_id]["current_msg_id"] = msg.message_id
 
     elif call.data.startswith("sub_"):
         bot.answer_callback_query(call.id)
@@ -898,19 +942,28 @@ def callback_query(call):
                 types.InlineKeyboardButton("👩‍🏫 Лариса Николаевна", callback_data="eng_group_Лариса Николаевна")
             )
             markup.row(types.InlineKeyboardButton("🏠 На главную", callback_data="go_home"))
-            bot.edit_message_text(
-                "🇬🇧 Выбери подгруппу по английскому языку:",
+            try:
+                bot.delete_message(chat_id, message_id)
+            except Exception:
+                pass
+            msg = bot.send_message(
                 chat_id,
-                message_id,
+                "🇬🇧 Выбери подгруппу по английскому языку:",
                 reply_markup=markup,
             )
+            user_data[user_id]["current_msg_id"] = msg.message_id
         else:
             user_data[user_id]["target_subject"] = selected_subject
             user_data[user_id]["step"] = "waiting_date"
             markup = types.InlineKeyboardMarkup()
             markup.row(types.InlineKeyboardButton("🏠 На главную", callback_data="go_home"))
             prompt_text = f"📅 Введи дату сдачи для предмета {selected_subject} (например 9.9 или 9.9.2026):"
-            bot.edit_message_text(prompt_text, chat_id, message_id, reply_markup=markup)
+            try:
+                bot.delete_message(chat_id, message_id)
+            except Exception:
+                pass
+            msg = bot.send_message(chat_id, prompt_text, reply_markup=markup)
+            user_data[user_id]["current_msg_id"] = msg.message_id
 
     elif call.data.startswith("eng_group_"):
         bot.answer_callback_query(call.id)
@@ -922,7 +975,12 @@ def callback_query(call):
         markup = types.InlineKeyboardMarkup()
         markup.row(types.InlineKeyboardButton("🏠 На главную", callback_data="go_home"))
         prompt_text = f"📅 Введи дату сдачи для предмета {selected_subject} (например 9.9):"
-        bot.edit_message_text(prompt_text, chat_id, message_id, reply_markup=markup)
+        try:
+            bot.delete_message(chat_id, message_id)
+        except Exception:
+            pass
+        msg = bot.send_message(chat_id, prompt_text, reply_markup=markup)
+        user_data[user_id]["current_msg_id"] = msg.message_id
 
     elif call.data == "starosta_delete_menu":
         bot.answer_callback_query(call.id)
@@ -947,7 +1005,12 @@ def callback_query(call):
             text = "🗑 Удаление ДЗ:\n\nВ базе пока нет активных заданий для удаления."
         markup.row(types.InlineKeyboardButton("🔙 Назад в меню старосты", callback_data="back_to_starosta"))
         markup.row(types.InlineKeyboardButton("🏠 На главную", callback_data="go_home"))
-        bot.edit_message_text(text, chat_id, message_id, reply_markup=markup)
+        try:
+            bot.delete_message(chat_id, message_id)
+        except Exception:
+            pass
+        msg = bot.send_message(chat_id, text, reply_markup=markup)
+        user_data[user_id]["current_msg_id"] = msg.message_id
 
     elif call.data.startswith("del_"):
         bot.answer_callback_query(call.id, "Задание удалено! 🗑")
@@ -988,7 +1051,12 @@ def callback_query(call):
             text = "🗑 Удаление ДЗ:\n\nВ базе больше нет заданий."
         markup.row(types.InlineKeyboardButton("🔙 Назад в меню старосты", callback_data="back_to_starosta"))
         markup.row(types.InlineKeyboardButton("🏠 На главную", callback_data="go_home"))
-        bot.edit_message_text(text, chat_id, message_id, reply_markup=markup)
+        try:
+            bot.delete_message(chat_id, message_id)
+        except Exception:
+            pass
+        msg = bot.send_message(chat_id, text, reply_markup=markup)
+        user_data[user_id]["current_msg_id"] = msg.message_id
 
     elif call.data == "back_to_starosta":
         bot.answer_callback_query(call.id)
@@ -998,7 +1066,12 @@ def callback_query(call):
         markup.row(types.InlineKeyboardButton("📸 Распознать ДЗ по скриншотам", callback_data="starosta_ocr_mode"))
         markup.row(types.InlineKeyboardButton("🗑 Удалить ДЗ", callback_data="starosta_delete_menu"))
         markup.row(types.InlineKeyboardButton("🏠 На главную", callback_data="go_home"))
-        bot.edit_message_text(starosta_text, chat_id, message_id, reply_markup=markup)
+        try:
+            bot.delete_message(chat_id, message_id)
+        except Exception:
+            pass
+        msg = bot.send_message(chat_id, starosta_text, reply_markup=markup)
+        user_data[user_id]["current_msg_id"] = msg.message_id
 
 
 @bot.message_handler(content_types=["text", "photo", "document", "video"])
@@ -1048,10 +1121,14 @@ def handle_incoming_content(message):
             "Можешь отправить ещё фото или нажать «Готово, запустить анализ»!"
         )
 
+        try:
+            bot.delete_message(chat_id, message.message_id)
+        except Exception:
+            pass
+
         if menu_id:
             try:
-                bot.edit_message_text(prompt_text, chat_id, menu_id, reply_markup=markup)
-                return
+                bot.delete_message(chat_id, menu_id)
             except Exception:
                 pass
         msg = bot.send_message(chat_id, prompt_text, reply_markup=markup)
@@ -1072,11 +1149,11 @@ def handle_incoming_content(message):
         markup.row(types.InlineKeyboardButton("📸 Распознать ДЗ по скриншотам", callback_data="starosta_ocr_mode"))
         markup.row(types.InlineKeyboardButton("🗑 Удалить ДЗ", callback_data="starosta_delete_menu"))
         markup.row(types.InlineKeyboardButton("🏠 На главную", callback_data="go_home"))
+        
         menu_id = user_data[user_id].get("current_msg_id")
         if menu_id:
             try:
-                bot.edit_message_text(starosta_text, chat_id, menu_id, reply_markup=markup)
-                return
+                bot.delete_message(chat_id, menu_id)
             except Exception:
                 pass
         msg = bot.send_message(chat_id, starosta_text, reply_markup=markup)
@@ -1098,8 +1175,7 @@ def handle_incoming_content(message):
                 menu_id = user_data[user_id].get("current_msg_id")
                 if menu_id:
                     try:
-                        bot.edit_message_text(error_text, chat_id, menu_id, reply_markup=markup)
-                        return
+                        bot.delete_message(chat_id, menu_id)
                     except Exception:
                         pass
                 msg = bot.send_message(chat_id, error_text, reply_markup=markup)
@@ -1112,8 +1188,7 @@ def handle_incoming_content(message):
             menu_id = user_data[user_id].get("current_msg_id")
             if menu_id:
                 try:
-                    bot.edit_message_text(error_text, chat_id, menu_id, reply_markup=markup)
-                    return
+                    bot.delete_message(chat_id, menu_id)
                 except Exception:
                     pass
             msg = bot.send_message(chat_id, error_text, reply_markup=markup)
@@ -1125,11 +1200,11 @@ def handle_incoming_content(message):
         prompt_text = f"📅 Дата {text} сохранена.\n\nТеперь отправь текст домашнего задания (можно прикрепить фото, видео или документ):"
         markup = types.InlineKeyboardMarkup()
         markup.row(types.InlineKeyboardButton("🏠 На главную", callback_data="go_home"))
+        
         menu_id = user_data[user_id].get("current_msg_id")
         if menu_id:
             try:
-                bot.edit_message_text(prompt_text, chat_id, menu_id, reply_markup=markup)
-                return
+                bot.delete_message(chat_id, menu_id)
             except Exception:
                 pass
         msg = bot.send_message(chat_id, prompt_text, reply_markup=markup)
@@ -1185,11 +1260,10 @@ def handle_incoming_content(message):
         markup = types.InlineKeyboardMarkup()
         markup.row(types.InlineKeyboardButton("🏠 На главную", callback_data="go_home"))
 
-        menu_id = user_data[user_id]["current_msg_id"]
+        menu_id = user_data[user_id].get("current_msg_id")
         if menu_id:
             try:
-                bot.edit_message_text(success_text, chat_id, menu_id, reply_markup=markup)
-                return
+                bot.delete_message(chat_id, menu_id)
             except Exception:
                 pass
         msg = bot.send_message(chat_id, success_text, reply_markup=markup)
