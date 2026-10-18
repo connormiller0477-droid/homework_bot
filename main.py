@@ -3,9 +3,9 @@ import sqlite3
 from datetime import datetime, timedelta
 import telebot
 from telebot import types
-import numpy as np
-import cv2
 import json
+from PIL import Image
+import io
 
 # Импортируем официальную библиотеку Google GenAI
 from google import genai
@@ -218,23 +218,26 @@ def clean_old_homeworks(user_id):
 
 
 def analyze_images_with_gemini(photo_bytes_list):
-    """Отправляем скриншоты в Gemini для интеллектуального извлечения домашнего задания с отладкой."""
+    """Отправляем скриншоты в Gemini для интеллектуального извлечения домашнего задания."""
     print("--- ЗАПУСК АНАЛИЗА GEMINI ---")
     
     if not client:
-        print("❌ ОШИБКА: Клиент Gemini равен None! Переменная GEMINI_API_KEY на Render не найдена или пуста.")
+        print("❌ ОШИБКА: Клиент Gemini равен None! Переменная GEMINI_API_KEY на Render не найдена.")
         return []
-    else:
-        print("✅ Клиент Gemini успешно инициализирован.")
 
     contents = []
     for b in photo_bytes_list:
-        contents.append(
-            genai_types.Part.from_bytes(
-                data=b,
-                mime_type="image/jpeg",
+        try:
+            pil_img = Image.open(io.BytesIO(b))
+            contents.append(pil_img)
+        except Exception as img_err:
+            print(f"Ошибка чтения картинки PIL: {img_err}")
+            contents.append(
+                genai_types.Part.from_bytes(
+                    data=b,
+                    mime_type="image/jpeg",
+                )
             )
-        )
 
     prompt = f"""
     Проанализируй скриншоты школьного электронного дневника.
@@ -1242,10 +1245,8 @@ def handle_incoming_content(message):
         pass
 
 
-    if __name__ == "__main__":
+if __name__ == "__main__":
     print("Бот запущен с поддержкой Gemini AI...")
-    
-    # ТЕСТОВОЕ ПОДКЛЮЧЕНИЕ К GEMINI ПРИ СТАРТЕ
     if client:
         try:
             test_resp = client.models.generate_content(
