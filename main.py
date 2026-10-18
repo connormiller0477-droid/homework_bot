@@ -478,7 +478,16 @@ def callback_query(call):
 
     if call.data == "start_ocr_process":
         bot.answer_callback_query(call.id, "Запускаю нейросеть...")
-        bot.edit_message_text("⏳ Нейросеть изучает скриншоты... Это займет несколько секунд.", chat_id, message_id)
+        
+        try:
+            bot.edit_message_text("⏳ Нейросеть изучает скриншоты... Это займет несколько секунд.", chat_id, message_id)
+        except Exception:
+            pass
+
+        try:
+            bot.send_chat_action(chat_id, 'typing')
+        except Exception:
+            pass
 
         photo_bytes_list = user_data[user_id].get("ocr_photos", [])
         parsed_tasks = analyze_images_with_gemini(photo_bytes_list)
