@@ -40,7 +40,7 @@ TOKEN = "8797963662:AAGi6DZhW6Fl3bWwGMELIluOsx7F0xw0JdI"
 bot = telebot.TeleBot(TOKEN)
 
 # Инициализируем клиент Gemini API
-client = genai.Client(api_key="AQ.Ab8RN6Jn5WMD35eWeKq2nbRCC2u-3XcWfKhePeCPWl0mGn_DRg")
+client = genai.Client(api_key="AQ.Ab8RN6Ln-v3c9Lrnncix6jxqdXGCENr-MCXluXYRyZ057ZZesw")
 
 DB_FILE = "homework.db"
 
