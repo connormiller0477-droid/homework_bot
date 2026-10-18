@@ -299,11 +299,7 @@ def send_welcome(message):
     user_data[user_id]["editing_task_idx"] = None
     user_data[user_id]["ocr_photos"] = []
 
-    try:
-        bot.delete_message(message.chat.id, message.message_id)
-    except Exception:
-        pass
-
+    # Команда /start НЕ удаляет сообщение пользователя, а просто присылает приветствие вниз
     msg = bot.send_message(
         message.chat.id,
         "Добро пожаловать!👋\n\nЭто проводник по домашнему заданию. Что тебя интересует?📚",
@@ -1260,7 +1256,7 @@ def handle_incoming_content(message):
         markup = types.InlineKeyboardMarkup()
         markup.row(types.InlineKeyboardButton("🏠 На главную", callback_data="go_home"))
 
-        menu_id = user_data[user_id].get("current_msg_id")
+        menu_id = user_data[user_id]["current_msg_id"]
         if menu_id:
             try:
                 bot.delete_message(chat_id, menu_id)
