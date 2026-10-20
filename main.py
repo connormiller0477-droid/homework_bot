@@ -37,7 +37,7 @@ threading.Thread(target=run_web_server, daemon=True).start()
 # -------------------------------------------------------------------------
 
 # Токен твоего Telegram-бота
-TOKEN = "8797963662:AAFhzabFomFhMQgpkLr_XZh2XZiNyyq2BZs"
+TOKEN = "8879883999:AAFiGYOV9A_eU9LAx6SxEJ1L_5nNs8M4jjI"
 bot = telebot.TeleBot(TOKEN)
 
 # Безопасная инициализация клиента Gemini API через переменную окружения Render
@@ -220,7 +220,7 @@ def clean_old_homeworks(user_id):
 
 
 def analyze_images_with_gemini(photo_bytes_list):
-    """Отправляем скриншоты в Gemini для интеллектуального извлечения домашнего задания."""
+    """Отправляем сжатые скриншоты в Gemini для быстрого извлечения домашнего задания."""
     print("--- ЗАПУСК АНАЛИЗА GEMINI ---")
 
     if not client:
@@ -230,10 +230,18 @@ def analyze_images_with_gemini(photo_bytes_list):
     contents = []
     for b in photo_bytes_list:
         try:
-            pil_img = Image.open(io.BytesIO(b))
+            # Сжимаем изображение в памяти для ускорения работы в несколько раз
+            img = Image.open(io.BytesIO(b))
+            img.thumbnail((1024, 1024))  # Уменьшаем максимальную сторону до 1024px
+
+            output = io.BytesIO()
+            img.save(output, format="JPEG", quality=80)
+            compressed_bytes = output.getvalue()
+
+            pil_img = Image.open(io.BytesIO(compressed_bytes))
             contents.append(pil_img)
         except Exception as img_err:
-            print(f"Ошибка чтения картинки PIL: {img_err}")
+            print(f"Ошибка сжатия картинки PIL: {img_err}")
             contents.append(
                 genai_types.Part.from_bytes(
                     data=b,
@@ -264,7 +272,6 @@ def analyze_images_with_gemini(photo_bytes_list):
 
     try:
         print("⏳ Отправка запроса в Gemini API...")
-        # Установлена запрашиваемая версия модели gemini-3.8-flash
         response = client.models.generate_content(
             model='gemini-3.8-flash',
             contents=contents,
@@ -509,16 +516,45 @@ def callback_query(call):
             bot.answer_callback_query(call.id, "Нет заданий для сохранения!")
             return
 
-        for t in tasks_to_add:
-            subject = t["subject"]
-            date_val = t["date"]
-            text_val = t["text"]
+        extended_subjects = list(subjects_list)
+        extended_subjects.extend([
+            "Английский язык (Елена Николаевна)",
+            "Английский язык (Лариса Николаевна)",
+        ])
 
-            add_homework_to_db(subject, date_val, text_val)
-            task_info = {"date": date_val, "text": text_val, "file_id": None, "file_type": None}
-            homework_storage[subject].append(task_info)
-            for uid in user_data:
-                user_data[uid]["active"][subject].append(task_info)
+        saved_count = 0
+        for t in tasks_to_add:
+            subject = t["subject"].strip()
+            date_val = t["date"].strip()
+            text_val = t["text"].strip()
+
+            # Защитная проверка названий предметов
+            if subject not in extended_subjects:
+                matched = False
+                for valid_sub in extended_subjects:
+                    if subject.lower() in valid_sub.lower() or valid_sub.lower() in subject.lower():
+                        subject = valid_sub
+                        matched = True
+                        break
+                if not matched:
+                    subject = "Алгебра"
+
+            try:
+                add_homework_to_db(subject, date_val, text_val)
+                task_info = {"date": date_val, "text": text_val, "file_id": None, "file_type": None}
+
+                if subject not in homework_storage:
+                    homework_storage[subject] = []
+                homework_storage[subject].append(task_info)
+
+                for uid in user_data:
+                    if subject not in user_data[uid]["active"]:
+                        user_data[uid]["active"][subject] = []
+                    user_data[uid]["active"][subject].append(task_info)
+
+                saved_count += 1
+            except Exception as db_err:
+                print(f"❌ Ошибка сохранения задания в БД: {db_err}")
 
         user_data[user_id]["ocr_parsed_tasks"] = []
         user_data[user_id]["ocr_photos"] = []
@@ -527,8 +563,11 @@ def callback_query(call):
         markup = types.InlineKeyboardMarkup()
         markup.row(types.InlineKeyboardButton("🏠 На главную", callback_data="go_home"))
         bot.edit_message_text(
-            f"✅ Успешно добавлено заданий: {len(tasks_to_add)}!\n\nВсе ученики уже видят обновлённое ДЗ.", chat_id,
-            message_id, reply_markup=markup)
+            f"✅ Успешно добавлено заданий: {saved_count} из {len(tasks_to_add)}!\n\nВсе ученики уже видят обновлённое ДЗ.",
+            chat_id,
+            message_id,
+            reply_markup=markup
+        )
         return
 
     if call.data.startswith("set_eng_"):
@@ -1260,7 +1299,6 @@ if __name__ == "__main__":
     print("Бот запущен с поддержкой Gemini AI...")
     if client:
         try:
-            # Установлена запрашиваемая версия модели gemini-3.8-flash
             test_resp = client.models.generate_content(
                 model='gemini-3.8-flash',
                 contents='Ответь словом "ОК", если видишь этот запрос'
