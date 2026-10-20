@@ -264,8 +264,9 @@ def analyze_images_with_gemini(photo_bytes_list):
 
     try:
         print("⏳ Отправка запроса в Gemini API...")
+        # Установлена запрашиваемая версия модели gemini-3.8-flash
         response = client.models.generate_content(
-            model='gemini-2.5-flash',
+            model='gemini-3.8-flash',
             contents=contents,
         )
         print(f"📥 ОТВЕТ ОТ GEMINI (RAW):\n{response.text}")
@@ -293,9 +294,9 @@ def show_ocr_results(chat_id, message_id, user_id):
     if parsed_tasks:
         text = "🤖 **Нейросеть проанализировала скриншоты и нашла задания:**\n\n"
         for idx, item in enumerate(parsed_tasks):
-            text += f"<b>{idx + 1}. Предмет:</b> {item['subject']}\n"
-            text += f"  <b>Дата:</b> {item['date']}\n"
-            text += f"  <b>Задание:</b> {item['text']}\n\n"
+            text += f"{idx + 1}. Предмет: {item['subject']}\n"
+            text += f"Дата: {item['date']}\n"
+            text += f"Задание: {item['text']}\n\n"
             markup.row(types.InlineKeyboardButton(f"✏️ Изменить текст #{idx + 1}", callback_data=f"edit_ocr_{idx}"))
         text += "Всё верно? Нажми кнопку ниже, чтобы автоматически занести их в базу."
         markup.row(types.InlineKeyboardButton("✅ Подтвердить и сохранить", callback_data="confirm_ocr_save"))
@@ -304,9 +305,9 @@ def show_ocr_results(chat_id, message_id, user_id):
 
     markup.row(types.InlineKeyboardButton("🏠 На главную", callback_data="go_home"))
     try:
-        bot.edit_message_text(text, chat_id, message_id, parse_mode="HTML", reply_markup=markup)
+        bot.edit_message_text(text, chat_id, message_id, reply_markup=markup)
     except Exception:
-        msg = bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=markup)
+        msg = bot.send_message(chat_id, text, reply_markup=markup)
         user_data[user_id]["current_msg_id"] = msg.message_id
 
 
@@ -374,11 +375,11 @@ def callback_query(call):
         markup.row(types.InlineKeyboardButton("❌ Отмена", callback_data="back_to_ocr_results"))
 
         prompt_text = (
-            f"✏️ <b>Редактирование задания #{idx + 1} ({task['subject']})</b>\n\n"
-            f"Текущий текст:\n<i>{task['text']}</i>\n\n"
+            f"✏️ Редактирование задания #{idx + 1} ({task['subject']})\n\n"
+            f"Текущий текст:\n{task['text']}\n\n"
             "Отправь новый текст для этого задания:"
         )
-        bot.edit_message_text(prompt_text, chat_id, message_id, parse_mode="HTML", reply_markup=markup)
+        bot.edit_message_text(prompt_text, chat_id, message_id, reply_markup=markup)
         return
 
     if call.data == "back_to_ocr_results":
@@ -1259,8 +1260,9 @@ if __name__ == "__main__":
     print("Бот запущен с поддержкой Gemini AI...")
     if client:
         try:
+            # Установлена запрашиваемая версия модели gemini-3.8-flash
             test_resp = client.models.generate_content(
-                model='gemini-2.5-flash',
+                model='gemini-3.8-flash',
                 contents='Ответь словом "ОК", если видишь этот запрос'
             )
             print(f"ТЕСТ GEMINI API УСПЕШЕН: {test_resp.text}")
