@@ -36,8 +36,8 @@ def run_web_server():
 threading.Thread(target=run_web_server, daemon=True).start()
 # -------------------------------------------------------------------------
 
-# Токен твоего Telegram-бота
-TOKEN = "8879883999:AAEM0OKR7oUF12tpvEvkm7TKKMYovbDAh2c"
+# ВНИМАНИЕ: Убедитесь, что здесь указан ваш ВЕРНЫЙ токен бота от BotFather!
+TOKEN = "8879883999:AAG_swblVX60SqC6iseWXfKBLtSpk4re-m4"
 bot = telebot.TeleBot(TOKEN)
 
 # Безопасная инициализация клиента Gemini API через переменную окружения Render
@@ -337,10 +337,7 @@ def send_welcome(message):
     user_data[user_id]["editing_task_idx"] = None
     user_data[user_id]["ocr_photos"] = []
 
-    try:
-        bot.delete_message(message.chat.id, message.message_id)
-    except Exception:
-        pass
+    # Сообщение пользователя /start НЕ удаляется
 
     msg = bot.send_message(
         message.chat.id,
@@ -1150,7 +1147,7 @@ def handle_incoming_content(message):
     text = message.text or message.caption or ""
     step = user_data[user_id].get("step")
 
-    # 1. Сбор фотографий для OCR (НЕ удаляем фото, так как они нужны нейросети)
+    # 1. Сбор фотографий для OCR (НЕ удаляем фото)
     if step == "collecting_ocr_photos" and message.photo:
         try:
             file_info = bot.get_file(message.photo[-1].file_id)
@@ -1359,7 +1356,7 @@ def handle_incoming_content(message):
         user_data[user_id]["current_msg_id"] = msg.message_id
         return
 
-    # 6. Если бот не ожидает никакого ввода от пользователя (обычный чат или бессмыслица) -> молча удаляем сообщение
+    # 6. Если бот не ожидает никакого ввода -> молча удаляем бессмысленное сообщение
     try:
         bot.delete_message(chat_id, message.message_id)
     except Exception:
