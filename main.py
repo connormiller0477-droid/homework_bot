@@ -230,14 +230,11 @@ def analyze_images_with_gemini(photo_bytes_list):
     contents = []
     for b in photo_bytes_list:
         try:
-            # Сжимаем изображение в памяти для ускорения работы в несколько раз
             img = Image.open(io.BytesIO(b))
-            img.thumbnail((1024, 1024))  # Уменьшаем максимальную сторону до 1024px
-
+            img.thumbnail((1024, 1024))
             output = io.BytesIO()
             img.save(output, format="JPEG", quality=80)
             compressed_bytes = output.getvalue()
-
             pil_img = Image.open(io.BytesIO(compressed_bytes))
             contents.append(pil_img)
         except Exception as img_err:
@@ -313,9 +310,10 @@ def show_ocr_results(chat_id, message_id, user_id):
     markup.row(types.InlineKeyboardButton("🏠 На главную", callback_data="go_home"))
     try:
         bot.edit_message_text(text, chat_id, message_id, reply_markup=markup)
-    except Exception:
-        msg = bot.send_message(chat_id, text, reply_markup=markup)
-        user_data[user_id]["current_msg_id"] = msg.message_id
+    except Exception as e:
+        if "message is not modified" not in str(e):
+            msg = bot.send_message(chat_id, text, reply_markup=markup)
+            user_data[user_id]["current_msg_id"] = msg.message_id
 
 
 def get_welcome_markup():
@@ -386,7 +384,11 @@ def callback_query(call):
             f"Текущий текст:\n{task['text']}\n\n"
             "Отправь новый текст для этого задания:"
         )
-        bot.edit_message_text(prompt_text, chat_id, message_id, reply_markup=markup)
+        try:
+            bot.edit_message_text(prompt_text, chat_id, message_id, reply_markup=markup)
+        except Exception as e:
+            if "message is not modified" not in str(e):
+                pass
         return
 
     if call.data == "back_to_ocr_results":
@@ -425,11 +427,6 @@ def callback_query(call):
                 markup = types.InlineKeyboardMarkup()
                 markup.row(btn_done, btn_back)
 
-                try:
-                    bot.delete_message(chat_id, message_id)
-                except Exception:
-                    pass
-
                 if file_id and file_type:
                     if file_type == "photo":
                         msg = bot.send_photo(chat_id, file_id, caption=caption, reply_markup=markup)
@@ -463,11 +460,6 @@ def callback_query(call):
             except ValueError:
                 pass
 
-        try:
-            bot.delete_message(chat_id, message_id)
-        except Exception:
-            pass
-
         call.data = "btn_all_hw"
         callback_query(call)
         return
@@ -487,7 +479,11 @@ def callback_query(call):
             "Присылай скриншоты дневника (можно пачкой).\n"
             "Когда отправишь всё, нажми кнопку ниже для анализа нейросетью."
         )
-        bot.edit_message_text(text, chat_id, message_id, reply_markup=markup)
+        try:
+            bot.edit_message_text(text, chat_id, message_id, reply_markup=markup)
+        except Exception as e:
+            if "message is not modified" not in str(e):
+                pass
         return
 
     if call.data == "start_ocr_process":
@@ -495,8 +491,9 @@ def callback_query(call):
 
         try:
             bot.edit_message_text("⏳ Нейросеть изучает скриншоты... Это займет несколько секунд.", chat_id, message_id)
-        except Exception:
-            pass
+        except Exception as e:
+            if "message is not modified" not in str(e):
+                pass
 
         try:
             bot.send_chat_action(chat_id, 'typing')
@@ -528,7 +525,6 @@ def callback_query(call):
             date_val = t["date"].strip()
             text_val = t["text"].strip()
 
-            # Защитная проверка названий предметов
             if subject not in extended_subjects:
                 matched = False
                 for valid_sub in extended_subjects:
@@ -562,24 +558,32 @@ def callback_query(call):
 
         markup = types.InlineKeyboardMarkup()
         markup.row(types.InlineKeyboardButton("🏠 На главную", callback_data="go_home"))
-        bot.edit_message_text(
-            f"✅ Успешно добавлено заданий: {saved_count} из {len(tasks_to_add)}!\n\nВсе ученики уже видят обновлённое ДЗ.",
-            chat_id,
-            message_id,
-            reply_markup=markup
-        )
+        try:
+            bot.edit_message_text(
+                f"✅ Успешно добавлено заданий: {saved_count} из {len(tasks_to_add)}!\n\nВсе ученики уже видят обновлённое ДЗ.",
+                chat_id,
+                message_id,
+                reply_markup=markup
+            )
+        except Exception as e:
+            if "message is not modified" not in str(e):
+                pass
         return
 
     if call.data.startswith("set_eng_"):
         bot.answer_callback_query(call.id, "Группа сохранена! ✅")
         teacher = call.data.replace("set_eng_", "")
         user_data[user_id]["eng_group"] = teacher
-        bot.edit_message_text(
-            f"🇬🇧 Отлично! Твоя группа по английскому: {teacher}.\n\nТеперь выбери нужное действие:",
-            chat_id,
-            message_id,
-            reply_markup=get_welcome_markup(),
-        )
+        try:
+            bot.edit_message_text(
+                f"🇬🇧 Отлично! Твоя группа по английскому: {teacher}.\n\nТеперь выбери нужное действие:",
+                chat_id,
+                message_id,
+                reply_markup=get_welcome_markup(),
+            )
+        except Exception as e:
+            if "message is not modified" not in str(e):
+                pass
         return
 
     if call.data == "go_home":
@@ -592,17 +596,14 @@ def callback_query(call):
                 message_id,
                 reply_markup=get_welcome_markup(),
             )
-        except Exception:
-            try:
-                bot.delete_message(chat_id, message_id)
-            except Exception:
-                pass
-            msg = bot.send_message(
-                chat_id,
-                "Добро пожаловать!👋\n\nЭто проводник по домашнему заданию. Что тебя интересует?📚",
-                reply_markup=get_welcome_markup(),
-            )
-            user_data[user_id]["current_msg_id"] = msg.message_id
+        except Exception as e:
+            if "message is not modified" not in str(e):
+                msg = bot.send_message(
+                    chat_id,
+                    "Добро пожаловать!👋\n\nЭто проводник по домашнему заданию. Что тебя интересует?📚",
+                    reply_markup=get_welcome_markup(),
+                )
+                user_data[user_id]["current_msg_id"] = msg.message_id
 
     elif call.data == "btn_tomorrow":
         if user_data[user_id]["eng_group"] is None:
@@ -613,12 +614,16 @@ def callback_query(call):
                 types.InlineKeyboardButton("👩‍🏫 Лариса Николаевна", callback_data="set_eng_Лариса Николаевна")
             )
             markup.row(types.InlineKeyboardButton("🏠 На главную", callback_data="go_home"))
-            bot.edit_message_text(
-                "🇬🇧 Укажи свою группу по английскому языку перед просмотром ДЗ:",
-                chat_id,
-                message_id,
-                reply_markup=markup,
-            )
+            try:
+                bot.edit_message_text(
+                    "🇬🇧 Укажи свою группу по английскому языку перед просмотром ДЗ:",
+                    chat_id,
+                    message_id,
+                    reply_markup=markup,
+                )
+            except Exception as e:
+                if "message is not modified" not in str(e):
+                    pass
             return
 
         bot.answer_callback_query(call.id)
@@ -680,13 +685,10 @@ def callback_query(call):
 
         try:
             bot.edit_message_text(text, chat_id, message_id, reply_markup=markup)
-        except Exception:
-            try:
-                bot.delete_message(chat_id, message_id)
-            except Exception:
-                pass
-            msg = bot.send_message(chat_id, text, reply_markup=markup)
-            user_data[user_id]["current_msg_id"] = msg.message_id
+        except Exception as e:
+            if "message is not modified" not in str(e):
+                msg = bot.send_message(chat_id, text, reply_markup=markup)
+                user_data[user_id]["current_msg_id"] = msg.message_id
 
     elif call.data == "btn_all_hw":
         if user_data[user_id]["eng_group"] is None:
@@ -697,12 +699,16 @@ def callback_query(call):
                 types.InlineKeyboardButton("👩‍🏫 Лариса Николаевна", callback_data="set_eng_Лариса Николаевна")
             )
             markup.row(types.InlineKeyboardButton("🏠 На главную", callback_data="go_home"))
-            bot.edit_message_text(
-                "🇬🇧 Укажи свою группу по английскому языку перед просмотром ДЗ:",
-                chat_id,
-                message_id,
-                reply_markup=markup,
-            )
+            try:
+                bot.edit_message_text(
+                    "🇬🇧 Укажи свою группу по английскому языку перед просмотром ДЗ:",
+                    chat_id,
+                    message_id,
+                    reply_markup=markup,
+                )
+            except Exception as e:
+                if "message is not modified" not in str(e):
+                    pass
             return
 
         bot.answer_callback_query(call.id)
@@ -757,13 +763,10 @@ def callback_query(call):
 
         try:
             bot.edit_message_text(text, chat_id, message_id, reply_markup=markup)
-        except Exception:
-            try:
-                bot.delete_message(chat_id, message_id)
-            except Exception:
-                pass
-            msg = bot.send_message(chat_id, text, reply_markup=markup)
-            user_data[user_id]["current_msg_id"] = msg.message_id
+        except Exception as e:
+            if "message is not modified" not in str(e):
+                msg = bot.send_message(chat_id, text, reply_markup=markup)
+                user_data[user_id]["current_msg_id"] = msg.message_id
 
     elif call.data == "btn_done":
         bot.answer_callback_query(call.id)
@@ -798,13 +801,10 @@ def callback_query(call):
 
         try:
             bot.edit_message_text(text, chat_id, message_id, reply_markup=markup)
-        except Exception:
-            try:
-                bot.delete_message(chat_id, message_id)
-            except Exception:
-                pass
-            msg = bot.send_message(chat_id, text, reply_markup=markup)
-            user_data[user_id]["current_msg_id"] = msg.message_id
+        except Exception as e:
+            if "message is not modified" not in str(e):
+                msg = bot.send_message(chat_id, text, reply_markup=markup)
+                user_data[user_id]["current_msg_id"] = msg.message_id
 
     elif call.data.startswith("done_all_") or call.data.startswith("done_tom_"):
         is_tomorrow_view = call.data.startswith("done_tom_")
@@ -870,7 +870,11 @@ def callback_query(call):
                 text = "📌 Домашняя работа на завтра:\n\nНа завтра заданий нет! Отдыхай 🎉"
 
             markup.row(types.InlineKeyboardButton("🏠 На главную", callback_data="go_home"))
-            bot.edit_message_text(text, chat_id, message_id, reply_markup=markup)
+            try:
+                bot.edit_message_text(text, chat_id, message_id, reply_markup=markup)
+            except Exception as e:
+                if "message is not modified" not in str(e):
+                    pass
         else:
             text = "📚 Всё актуальное домашнее задание:\n\n"
             has_tasks = False
@@ -905,7 +909,11 @@ def callback_query(call):
                 text = "📚 Всё домашнее задание:\n\nУра! Все задания выполнены 🎉"
 
             markup.row(types.InlineKeyboardButton("🏠 На главную", callback_data="go_home"))
-            bot.edit_message_text(text, chat_id, message_id, reply_markup=markup)
+            try:
+                bot.edit_message_text(text, chat_id, message_id, reply_markup=markup)
+            except Exception as e:
+                if "message is not modified" not in str(e):
+                    pass
 
     elif call.data.startswith("undone_"):
         bot.answer_callback_query(call.id, "Задание возвращено в активные! ↩️")
@@ -949,7 +957,11 @@ def callback_query(call):
         if not has_completed:
             text = "📁 Выполненное Д/З:\n\nТы пока не отметил ни одного задания как выполненное."
         markup.row(types.InlineKeyboardButton("🏠 На главную", callback_data="go_home"))
-        bot.edit_message_text(text, chat_id, message_id, reply_markup=markup)
+        try:
+            bot.edit_message_text(text, chat_id, message_id, reply_markup=markup)
+        except Exception as e:
+            if "message is not modified" not in str(e):
+                pass
 
     elif call.data == "choose_subject":
         bot.answer_callback_query(call.id)
@@ -971,12 +983,16 @@ def callback_query(call):
                 idx1 = subjects_list.index(subj1)
                 markup.add(types.InlineKeyboardButton(subj1, callback_data=f"sub_{idx1}"))
         markup.row(types.InlineKeyboardButton("🏠 На главную", callback_data="go_home"))
-        bot.edit_message_text(
-            "📚 Выбери предмет, для которого хочешь записать Д/З:",
-            chat_id,
-            message_id,
-            reply_markup=markup,
-        )
+        try:
+            bot.edit_message_text(
+                "📚 Выбери предмет, для которого хочешь записать Д/З:",
+                chat_id,
+                message_id,
+                reply_markup=markup,
+            )
+        except Exception as e:
+            if "message is not modified" not in str(e):
+                pass
 
     elif call.data.startswith("sub_"):
         bot.answer_callback_query(call.id)
@@ -990,19 +1006,27 @@ def callback_query(call):
                 types.InlineKeyboardButton("👩‍🏫 Лариса Николаевна", callback_data="eng_group_Лариса Николаевна")
             )
             markup.row(types.InlineKeyboardButton("🏠 На главную", callback_data="go_home"))
-            bot.edit_message_text(
-                "🇬🇧 Выбери подгруппу по английскому языку:",
-                chat_id,
-                message_id,
-                reply_markup=markup,
-            )
+            try:
+                bot.edit_message_text(
+                    "🇬🇧 Выбери подгруппу по английскому языку:",
+                    chat_id,
+                    message_id,
+                    reply_markup=markup,
+                )
+            except Exception as e:
+                if "message is not modified" not in str(e):
+                    pass
         else:
             user_data[user_id]["target_subject"] = selected_subject
             user_data[user_id]["step"] = "waiting_date"
             markup = types.InlineKeyboardMarkup()
             markup.row(types.InlineKeyboardButton("🏠 На главную", callback_data="go_home"))
             prompt_text = f"📅 Введи дату сдачи для предмета {selected_subject} (например 9.9 или 9.9.2026):"
-            bot.edit_message_text(prompt_text, chat_id, message_id, reply_markup=markup)
+            try:
+                bot.edit_message_text(prompt_text, chat_id, message_id, reply_markup=markup)
+            except Exception as e:
+                if "message is not modified" not in str(e):
+                    pass
 
     elif call.data.startswith("eng_group_"):
         bot.answer_callback_query(call.id)
@@ -1014,7 +1038,11 @@ def callback_query(call):
         markup = types.InlineKeyboardMarkup()
         markup.row(types.InlineKeyboardButton("🏠 На главную", callback_data="go_home"))
         prompt_text = f"📅 Введи дату сдачи для предмета {selected_subject} (например 9.9):"
-        bot.edit_message_text(prompt_text, chat_id, message_id, reply_markup=markup)
+        try:
+            bot.edit_message_text(prompt_text, chat_id, message_id, reply_markup=markup)
+        except Exception as e:
+            if "message is not modified" not in str(e):
+                pass
 
     elif call.data == "starosta_delete_menu":
         bot.answer_callback_query(call.id)
@@ -1040,7 +1068,11 @@ def callback_query(call):
             text = "🗑 Удаление ДЗ:\n\nВ базе пока нет активных заданий для удаления."
         markup.row(types.InlineKeyboardButton("🔙 Назад в меню старосты", callback_data="back_to_starosta"))
         markup.row(types.InlineKeyboardButton("🏠 На главную", callback_data="go_home"))
-        bot.edit_message_text(text, chat_id, message_id, reply_markup=markup)
+        try:
+            bot.edit_message_text(text, chat_id, message_id, reply_markup=markup)
+        except Exception as e:
+            if "message is not modified" not in str(e):
+                pass
 
     elif call.data.startswith("del_"):
         bot.answer_callback_query(call.id, "Задание удалено! 🗑")
@@ -1082,7 +1114,11 @@ def callback_query(call):
             text = "🗑 Удаление ДЗ:\n\nВ базе больше нет заданий."
         markup.row(types.InlineKeyboardButton("🔙 Назад в меню старосты", callback_data="back_to_starosta"))
         markup.row(types.InlineKeyboardButton("🏠 На главную", callback_data="go_home"))
-        bot.edit_message_text(text, chat_id, message_id, reply_markup=markup)
+        try:
+            bot.edit_message_text(text, chat_id, message_id, reply_markup=markup)
+        except Exception as e:
+            if "message is not modified" not in str(e):
+                pass
 
     elif call.data == "back_to_starosta":
         bot.answer_callback_query(call.id)
@@ -1092,7 +1128,11 @@ def callback_query(call):
         markup.row(types.InlineKeyboardButton("📸 Распознать ДЗ по скриншотам", callback_data="starosta_ocr_mode"))
         markup.row(types.InlineKeyboardButton("🗑 Удалить ДЗ", callback_data="starosta_delete_menu"))
         markup.row(types.InlineKeyboardButton("🏠 На главную", callback_data="go_home"))
-        bot.edit_message_text(starosta_text, chat_id, message_id, reply_markup=markup)
+        try:
+            bot.edit_message_text(starosta_text, chat_id, message_id, reply_markup=markup)
+        except Exception as e:
+            if "message is not modified" not in str(e):
+                pass
 
 
 @bot.message_handler(content_types=["text", "photo", "document", "video"])
@@ -1105,11 +1145,6 @@ def handle_incoming_content(message):
     text = message.text or message.caption or ""
 
     if user_data[user_id].get("step") == "editing_ocr_text":
-        try:
-            bot.delete_message(chat_id, message.message_id)
-        except Exception:
-            pass
-
         idx = user_data[user_id].get("editing_task_idx")
         if idx is not None and 0 <= idx < len(user_data[user_id]["ocr_parsed_tasks"]):
             user_data[user_id]["ocr_parsed_tasks"][idx]["text"] = text.strip()
@@ -1122,7 +1157,7 @@ def handle_incoming_content(message):
             show_ocr_results(chat_id, menu_id, user_id)
         return
 
-    # Сбор фото для OCR (оригинальные фото НЕ удаляются ботом, пользователь может удалить их сам)
+    # Сбор фото для OCR без удаления сообщений
     if user_data[user_id].get("step") == "collecting_ocr_photos" and message.photo:
         try:
             file_info = bot.get_file(message.photo[-1].file_id)
@@ -1147,18 +1182,14 @@ def handle_incoming_content(message):
             try:
                 bot.edit_message_text(prompt_text, chat_id, menu_id, reply_markup=markup)
                 return
-            except Exception:
-                pass
+            except Exception as e:
+                if "message is not modified" not in str(e):
+                    pass
         msg = bot.send_message(chat_id, prompt_text, reply_markup=markup)
         user_data[user_id]["current_msg_id"] = msg.message_id
         return
 
     if text.strip() == SECRET_CODE:
-        try:
-            bot.delete_message(chat_id, message.message_id)
-        except Exception:
-            pass
-
         user_data[user_id]["target_subject"] = None
         user_data[user_id]["step"] = None
         starosta_text = "👨‍🏫 Добро пожаловать в режим старосты!"
@@ -1173,17 +1204,13 @@ def handle_incoming_content(message):
             try:
                 bot.edit_message_text(starosta_text, chat_id, menu_id, reply_markup=markup)
                 return
-            except Exception:
-                pass
+            except Exception as e:
+                if "message is not modified" not in str(e):
+                    pass
         msg = bot.send_message(chat_id, starosta_text, reply_markup=markup)
         user_data[user_id]["current_msg_id"] = msg.message_id
 
     elif user_data[user_id].get("step") == "waiting_date":
-        try:
-            bot.delete_message(chat_id, message.message_id)
-        except Exception:
-            pass
-
         date_text = text.strip()
         try:
             parsed_date = parse_flexible_date(date_text)
@@ -1196,8 +1223,9 @@ def handle_incoming_content(message):
                     try:
                         bot.edit_message_text(error_text, chat_id, menu_id, reply_markup=markup)
                         return
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        if "message is not modified" not in str(e):
+                            pass
                 msg = bot.send_message(chat_id, error_text, reply_markup=markup)
                 user_data[user_id]["current_msg_id"] = msg.message_id
                 return
@@ -1210,8 +1238,9 @@ def handle_incoming_content(message):
                 try:
                     bot.edit_message_text(error_text, chat_id, menu_id, reply_markup=markup)
                     return
-                except Exception:
-                    pass
+                except Exception as e:
+                    if "message is not modified" not in str(e):
+                        pass
             msg = bot.send_message(chat_id, error_text, reply_markup=markup)
             user_data[user_id]["current_msg_id"] = msg.message_id
             return
@@ -1227,17 +1256,13 @@ def handle_incoming_content(message):
             try:
                 bot.edit_message_text(prompt_text, chat_id, menu_id, reply_markup=markup)
                 return
-            except Exception:
-                pass
+            except Exception as e:
+                if "message is not modified" not in str(e):
+                    pass
         msg = bot.send_message(chat_id, prompt_text, reply_markup=markup)
         user_data[user_id]["current_msg_id"] = msg.message_id
 
     elif user_data[user_id].get("step") == "waiting_text":
-        try:
-            bot.delete_message(chat_id, message.message_id)
-        except Exception:
-            pass
-
         subject = user_data[user_id]["target_subject"]
         date_val = user_data[user_id]["temp_date"]
         user_data[user_id]["target_subject"] = None
@@ -1287,8 +1312,9 @@ def handle_incoming_content(message):
             try:
                 bot.edit_message_text(success_text, chat_id, menu_id, reply_markup=markup)
                 return
-            except Exception:
-                pass
+            except Exception as e:
+                if "message is not modified" not in str(e):
+                    pass
         msg = bot.send_message(chat_id, success_text, reply_markup=markup)
         user_data[user_id]["current_msg_id"] = msg.message_id
     else:
