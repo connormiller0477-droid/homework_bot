@@ -36,8 +36,7 @@ def run_web_server():
 threading.Thread(target=run_web_server, daemon=True).start()
 # -------------------------------------------------------------------------
 
-# ВНИМАНИЕ: Убедитесь, что здесь указан ваш ВЕРНЫЙ токен бота от BotFather!
-TOKEN = "8879883999:AAG_swblVX60SqC6iseWXfKBLtSpk4re-m4"
+TOKEN = "8797963662:AAFrRZyCZbQ029Z8XnrypHzoBm3iOzRl33s"
 bot = telebot.TeleBot(TOKEN)
 
 # Безопасная инициализация клиента Gemini API через переменную окружения Render
@@ -125,13 +124,14 @@ def load_global_homeworks():
 
     storage = {sub: [] for sub in extended_subjects}
     for subj, date, text, file_id, file_type in rows:
-        if subj in storage:
-            storage[subj].append({
-                "date": date,
-                "text": text,
-                "file_id": file_id,
-                "file_type": file_type,
-            })
+        if subj not in storage:
+            storage[subj] = []
+        storage[subj].append({
+            "date": date,
+            "text": text,
+            "file_id": file_id,
+            "file_type": file_type,
+        })
     return storage
 
 
@@ -169,9 +169,11 @@ def init_user(user_id):
             "Английский язык (Лариса Николаевна)",
         ])
 
+        all_storage_keys = set(extended_subjects).union(homework_storage.keys())
+
         user_data[user_id] = {
-            "active": {sub: list(homework_storage.get(sub, [])) for sub in extended_subjects},
-            "completed": {sub: [] for sub in extended_subjects},
+            "active": {sub: list(homework_storage.get(sub, [])) for sub in all_storage_keys},
+            "completed": {sub: [] for sub in all_storage_keys},
             "current_msg_id": None,
             "target_subject": None,
             "step": None,
@@ -185,26 +187,21 @@ def init_user(user_id):
 
 def clean_old_homeworks(user_id):
     now = datetime.now()
-    extended_subjects = list(subjects_list)
-    extended_subjects.extend([
-        "Английский язык (Елена Николаевна)",
-        "Английский язык (Лариса Николаевна)",
-    ])
-
-    for state_type in ["active", "completed"]:
-        for subj in extended_subjects:
-            filtered_tasks = []
-            for t_info in user_data[user_id][state_type][subj]:
-                try:
-                    task_date = parse_flexible_date(t_info["date"])
-                    limit_time = datetime.combine(task_date, datetime.min.time()) + timedelta(hours=4)
-                    if now < limit_time:
+    if user_id in user_data:
+        for state_type in ["active", "completed"]:
+            for subj in list(user_data[user_id][state_type].keys()):
+                filtered_tasks = []
+                for t_info in user_data[user_id][state_type][subj]:
+                    try:
+                        task_date = parse_flexible_date(t_info["date"])
+                        limit_time = datetime.combine(task_date, datetime.min.time()) + timedelta(hours=4)
+                        if now < limit_time:
+                            filtered_tasks.append(t_info)
+                    except ValueError:
                         filtered_tasks.append(t_info)
-                except ValueError:
-                    filtered_tasks.append(t_info)
-            user_data[user_id][state_type][subj] = filtered_tasks
+                user_data[user_id][state_type][subj] = filtered_tasks
 
-    for subj in extended_subjects:
+    for subj in list(homework_storage.keys()):
         filtered_global = []
         for t_info in homework_storage[subj]:
             try:
@@ -220,7 +217,7 @@ def clean_old_homeworks(user_id):
 
 
 def analyze_images_with_gemini(photo_bytes_list):
-    """Отправляем сжатые скриншоты в Gemini для быстрого извлечения домашнего задания[cite: 8]."""
+    """Отправляем скриншоты в исходном качестве без сжатия[cite: 8]."""
     print("--- ЗАПУСК АНАЛИЗА GEMINI ---")
 
     if not client:
@@ -230,15 +227,11 @@ def analyze_images_with_gemini(photo_bytes_list):
     contents = []
     for b in photo_bytes_list:
         try:
-            img = Image.open(io.BytesIO(b))
-            img.thumbnail((1024, 1024))
-            output = io.BytesIO()
-            img.save(output, format="JPEG", quality=80)
-            compressed_bytes = output.getvalue()
-            pil_img = Image.open(io.BytesIO(compressed_bytes))
+            # Передаем байты напрямую как изображение без потери качества и изменения размера PIL
+            pil_img = Image.open(io.BytesIO(b))
             contents.append(pil_img)
         except Exception as img_err:
-            print(f"Ошибка сжатия картинки PIL: {img_err}")
+            print(f"Ошибка открытия картинки: {img_err}")
             contents.append(
                 genai_types.Part.from_bytes(
                     data=b,
@@ -246,21 +239,18 @@ def analyze_images_with_gemini(photo_bytes_list):
                 )
             )
 
-    prompt = f"""
+    prompt = """
     Проанализируй скриншоты школьного электронного дневника.
     Найди все домашние задания.
 
-    Список доступных предметов в системе:
-    {", ".join(subjects_list)}
-
     Инструкции по разбору:
-    1. Предмет: Найди название предмета и приведи его к ТОЧНОМУ названию из списка выше (например, "Вероятность и статистика").
-    2. Дата: Найди дату сдачи задания (например, "на четверг, 22 октября"). Переведи её в формат ДД.ММ.ГГГГ (текущий год 2026, например "22.10.2026"). Не путай с датой публикации!
-    3. Задание: Извлеки текст задания (например, "повторить № 10 огэ."). Игнорируй тему урока.
+    1. Предмет: Возьми название предмета ровно так, как оно написано на скриншоте (например, "Иностранный язык (английский)", "Алгебра", "История" и т.д.).
+    2. Дата: Найди дату сдачи задания (например, "на среду, 21 октября"). Переведи её в формат ДД.ММ.ГГГГ (текущий год 2026, например "21.10.2026"). Не путай с датой публикации!
+    3. Задание: Извлеки текст задания (например, "стр 20 упр 5..."). Игнорируй тему урока.
 
     Верни ответ СТРОГО в формате JSON без какого-либо другого текста, разметки или пояснений:
     [
-      {{"subject": "Вероятность и статистика", "date": "22.10.2026", "text": "повторить № 10 огэ."}}
+      {"subject": "Иностранный язык (английский)", "date": "21.10.2026", "text": "стр 20 упр 5"}
     ]
 
     Если заданий не найдено, верни: []
@@ -270,7 +260,7 @@ def analyze_images_with_gemini(photo_bytes_list):
     try:
         print("⏳ Отправка запроса в Gemini API...")
         response = client.models.generate_content(
-            model='gemini-3.8-flash',
+            model='gemini-2.5-flash',
             contents=contents,
         )
         print(f"📥 ОТВЕТ ОТ GEMINI (RAW):\n{response.text}")
@@ -403,17 +393,14 @@ def callback_query(call):
     if call.data.startswith("show_file_"):
         bot.answer_callback_query(call.id, "Открываю файл...")
         parts = call.data.replace("show_file_", "").rsplit("_", 1)
-        extended_subjects = list(subjects_list)
-        extended_subjects.extend([
-            "Английский язык (Елена Николаевна)",
-            "Английский язык (Лариса Николаевна)",
-        ])
+        
+        all_subj_keys = list(user_data[user_id]["active"].keys())
 
         if len(parts) == 2:
             try:
                 subj_idx = int(parts[0])
                 idx = int(parts[1])
-                subj = extended_subjects[subj_idx]
+                subj = all_subj_keys[subj_idx]
                 task_info = user_data[user_id]["active"][subj][idx]
 
                 file_id = task_info.get("file_id")
@@ -444,17 +431,13 @@ def callback_query(call):
     if call.data.startswith("file_done_"):
         bot.answer_callback_query(call.id, "Задание выполнено! ✅")
         parts = call.data.replace("file_done_", "").rsplit("_", 1)
-        extended_subjects = list(subjects_list)
-        extended_subjects.extend([
-            "Английский язык (Елена Николаевна)",
-            "Английский язык (Лариса Николаевна)",
-        ])
+        all_subj_keys = list(user_data[user_id]["active"].keys())
 
         if len(parts) == 2:
             try:
                 subj_idx = int(parts[0])
                 idx = int(parts[1])
-                subj = extended_subjects[subj_idx]
+                subj = all_subj_keys[subj_idx]
                 active_list = user_data[user_id]["active"][subj]
                 if idx < len(active_list):
                     task_info = active_list.pop(idx)
@@ -515,27 +498,11 @@ def callback_query(call):
             bot.answer_callback_query(call.id, "Нет заданий для сохранения!")
             return
 
-        extended_subjects = list(subjects_list)
-        extended_subjects.extend([
-            "Английский язык (Елена Николаевна)",
-            "Английский язык (Лариса Николаевна)",
-        ])
-
         saved_count = 0
         for t in tasks_to_add:
             subject = t["subject"].strip()
             date_val = t["date"].strip()
             text_val = t["text"].strip()
-
-            if subject not in extended_subjects:
-                matched = False
-                for valid_sub in extended_subjects:
-                    if subject.lower() in valid_sub.lower() or valid_sub.lower() in subject.lower():
-                        subject = valid_sub
-                        matched = True
-                        break
-                if not matched:
-                    subject = "Алгебра"
 
             try:
                 add_homework_to_db(subject, date_val, text_val)
@@ -548,6 +515,7 @@ def callback_query(call):
                 for uid in user_data:
                     if subject not in user_data[uid]["active"]:
                         user_data[uid]["active"][subject] = []
+                        user_data[uid]["completed"][subject] = []
                     user_data[uid]["active"][subject].append(task_info)
 
                 saved_count += 1
@@ -608,35 +576,11 @@ def callback_query(call):
                 user_data[user_id]["current_msg_id"] = msg.message_id
 
     elif call.data == "btn_tomorrow":
-        if user_data[user_id]["eng_group"] is None:
-            bot.answer_callback_query(call.id)
-            markup = types.InlineKeyboardMarkup()
-            markup.row(
-                types.InlineKeyboardButton("👩‍🏫 Елена Николаевна", callback_data="set_eng_Елена Николаевна"),
-                types.InlineKeyboardButton("👩‍🏫 Лариса Николаевна", callback_data="set_eng_Лариса Николаевна")
-            )
-            markup.row(types.InlineKeyboardButton("🏠 На главную", callback_data="go_home"))
-            try:
-                bot.edit_message_text(
-                    "🇬🇧 Укажи свою группу по английскому языку перед просмотром ДЗ:",
-                    chat_id,
-                    message_id,
-                    reply_markup=markup,
-                )
-            except Exception as e:
-                if "message is not modified" not in str(e):
-                    pass
-            return
-
         bot.answer_callback_query(call.id)
-        extended_subjects = list(subjects_list)
-        extended_subjects.extend([
-            "Английский язык (Елена Николаевна)",
-            "Английский язык (Лариса Николаевна)",
-        ])
-
-        for subj in extended_subjects:
-            global_tasks = homework_storage[subj]
+        
+        all_subj_keys = list(user_data[user_id]["active"].keys())
+        for subj in all_subj_keys:
+            global_tasks = homework_storage.get(subj, [])
             user_active = user_data[user_id]["active"][subj]
             user_completed = user_data[user_id]["completed"][subj]
             for task in global_tasks:
@@ -645,15 +589,11 @@ def callback_query(call):
         clean_old_homeworks(user_id)
 
         tomorrow_date_obj = datetime.now().date() + timedelta(days=1)
-        user_group = user_data[user_id]["eng_group"]
-
         text = "📌 Домашняя работа на завтра:\n\n"
         markup = types.InlineKeyboardMarkup()
         has_tasks = False
 
         for subj, tasks in user_data[user_id]["active"].items():
-            if subj.startswith("Английский язык") and subj != f"Английский язык ({user_group})":
-                continue
             for i, t_info in enumerate(tasks):
                 try:
                     task_date_obj = parse_flexible_date(t_info["date"])
@@ -663,13 +603,12 @@ def callback_query(call):
 
                 if is_tomorrow or t_info["date"].strip().lower() in ["завтра"]:
                     has_tasks = True
-                    subj_idx = extended_subjects.index(subj)
+                    subj_idx = all_subj_keys.index(subj)
                     text += f"🔹 Предмет: {subj}\n"
                     text += f"📅 Дата: {t_info['date']}\n"
                     text += f"📝 Задание: {t_info['text']}\n\n"
 
-                    short_subj = subj.replace("Английский язык", "Англ.")
-                    btn_text = f"✅ {short_subj}"
+                    btn_text = f"✅ {subj}"
                     if len(btn_text) > 35:
                         btn_text = btn_text[:32] + "..."
 
@@ -693,35 +632,11 @@ def callback_query(call):
                 user_data[user_id]["current_msg_id"] = msg.message_id
 
     elif call.data == "btn_all_hw":
-        if user_data[user_id]["eng_group"] is None:
-            bot.answer_callback_query(call.id)
-            markup = types.InlineKeyboardMarkup()
-            markup.row(
-                types.InlineKeyboardButton("👩‍🏫 Елена Николаевна", callback_data="set_eng_Елена Николаевна"),
-                types.InlineKeyboardButton("👩‍🏫 Лариса Николаевна", callback_data="set_eng_Лариса Николаевна")
-            )
-            markup.row(types.InlineKeyboardButton("🏠 На главную", callback_data="go_home"))
-            try:
-                bot.edit_message_text(
-                    "🇬🇧 Укажи свою группу по английскому языку перед просмотром ДЗ:",
-                    chat_id,
-                    message_id,
-                    reply_markup=markup,
-                )
-            except Exception as e:
-                if "message is not modified" not in str(e):
-                    pass
-            return
-
         bot.answer_callback_query(call.id)
-        extended_subjects = list(subjects_list)
-        extended_subjects.extend([
-            "Английский язык (Елена Николаевна)",
-            "Английский язык (Лариса Николаевна)",
-        ])
-
-        for subj in extended_subjects:
-            global_tasks = homework_storage[subj]
+        
+        all_subj_keys = list(user_data[user_id]["active"].keys())
+        for subj in all_subj_keys:
+            global_tasks = homework_storage.get(subj, [])
             user_active = user_data[user_id]["active"][subj]
             user_completed = user_data[user_id]["completed"][subj]
             for task in global_tasks:
@@ -729,27 +644,22 @@ def callback_query(call):
                     user_active.append(task)
         clean_old_homeworks(user_id)
 
-        user_group = user_data[user_id]["eng_group"]
         text = "📚 Всё актуальное домашнее задание:\n\n"
         has_tasks = False
         markup = types.InlineKeyboardMarkup()
 
         for subj, tasks in user_data[user_id]["active"].items():
-            if subj.startswith("Английский язык") and subj != f"Английский язык ({user_group})":
-                continue
-
             if tasks:
                 has_tasks = True
                 for i, t_info in enumerate(tasks, 1):
-                    subj_idx = extended_subjects.index(subj)
+                    subj_idx = all_subj_keys.index(subj)
                     text += f"🔹 Предмет: {subj}\n"
                     text += f"📅 Дата: {t_info['date']}\n"
                     text += f"📝 Задание: {t_info['text']}\n\n"
 
-                    short_subj = subj.replace("Английский язык", "Англ.")
-                    btn_text = f"✅ {short_subj} ({i})"
+                    btn_text = f"✅ {subj} ({i})"
                     if len(btn_text) > 35:
-                        btn_text = f"✅ ({i}) {short_subj[:25]}..."
+                        btn_text = f"✅ ({i}) {subj[:25]}..."
 
                     btn_done = types.InlineKeyboardButton(btn_text, callback_data=f"done_all_{subj_idx}_{i - 1}")
                     if t_info.get("file_id"):
@@ -777,21 +687,13 @@ def callback_query(call):
         has_completed = False
         markup = types.InlineKeyboardMarkup()
 
-        user_group = user_data[user_id]["eng_group"]
-        extended_subjects = list(subjects_list)
-        extended_subjects.extend([
-            "Английский язык (Елена Николаевна)",
-            "Английский язык (Лариса Николаевна)",
-        ])
+        all_subj_keys = list(user_data[user_id]["completed"].keys())
 
         for subj, tasks in user_data[user_id]["completed"].items():
-            if subj.startswith("Английский язык") and subj != f"Английский язык ({user_group})":
-                continue
-
             if tasks:
                 has_completed = True
                 for i, t_info in enumerate(tasks, 1):
-                    subj_idx = extended_subjects.index(subj)
+                    subj_idx = all_subj_keys.index(subj)
                     text += f"✅ Предмет: {subj}\n"
                     text += f"📅 Дата: {t_info['date']}\n"
                     text += f"📝 Задание: {t_info['text']}\n\n"
@@ -813,25 +715,19 @@ def callback_query(call):
         prefix = "done_tom_" if is_tomorrow_view else "done_all_"
         bot.answer_callback_query(call.id, "Задание выполнено! ✅")
         parts = call.data.replace(prefix, "").rsplit("_", 1)
-        extended_subjects = list(subjects_list)
-        extended_subjects.extend([
-            "Английский язык (Елена Николаевна)",
-            "Английский язык (Лариса Николаевна)",
-        ])
+        all_subj_keys = list(user_data[user_id]["active"].keys())
 
         if len(parts) == 2:
             try:
                 subj_idx = int(parts[0])
                 idx = int(parts[1])
-                subj = extended_subjects[subj_idx]
+                subj = all_subj_keys[subj_idx]
                 active_list = user_data[user_id]["active"][subj]
                 if idx < len(active_list):
                     task_info = active_list.pop(idx)
                     user_data[user_id]["completed"][subj].append(task_info)
             except ValueError:
                 pass
-
-        user_group = user_data[user_id]["eng_group"]
 
         if is_tomorrow_view:
             tomorrow_date_obj = datetime.now().date() + timedelta(days=1)
@@ -840,8 +736,6 @@ def callback_query(call):
             has_tasks = False
 
             for subj, tasks in user_data[user_id]["active"].items():
-                if subj.startswith("Английский язык") and subj != f"Английский язык ({user_group})":
-                    continue
                 for i, t_info in enumerate(tasks):
                     try:
                         task_date_obj = parse_flexible_date(t_info["date"])
@@ -851,13 +745,12 @@ def callback_query(call):
 
                     if is_tomorrow or t_info["date"].strip().lower() in ["завтра"]:
                         has_tasks = True
-                        subj_idx = extended_subjects.index(subj)
+                        subj_idx = all_subj_keys.index(subj)
                         text += f"🔹 Предмет: {subj}\n"
                         text += f"📅 Дата: {t_info['date']}\n"
                         text += f"📝 Задание: {t_info['text']}\n\n"
 
-                        short_subj = subj.replace("Английский язык", "Англ.")
-                        btn_text = f"✅ {short_subj}"
+                        btn_text = f"✅ {subj}"
                         if len(btn_text) > 35:
                             btn_text = btn_text[:32] + "..."
 
@@ -883,21 +776,17 @@ def callback_query(call):
             markup = types.InlineKeyboardMarkup()
 
             for subj, tasks in user_data[user_id]["active"].items():
-                if subj.startswith("Английский язык") and subj != f"Английский язык ({user_group})":
-                    continue
-
                 if tasks:
                     has_tasks = True
                     for i, t_info in enumerate(tasks, 1):
-                        subj_idx = extended_subjects.index(subj)
+                        subj_idx = all_subj_keys.index(subj)
                         text += f"🔹 Предмет: {subj}\n"
                         text += f"📅 Дата: {t_info['date']}\n"
                         text += f"📝 Задание: {t_info['text']}\n\n"
 
-                        short_subj = subj.replace("Английский язык", "Англ.")
-                        btn_text = f"✅ {short_subj} ({i})"
+                        btn_text = f"✅ {subj} ({i})"
                         if len(btn_text) > 35:
-                            btn_text = f"✅ ({i}) {short_subj[:25]}..."
+                            btn_text = f"✅ ({i}) {subj[:25]}..."
 
                         btn_done = types.InlineKeyboardButton(btn_text, callback_data=f"done_all_{subj_idx}_{i - 1}")
                         if t_info.get("file_id"):
@@ -920,17 +809,13 @@ def callback_query(call):
     elif call.data.startswith("undone_"):
         bot.answer_callback_query(call.id, "Задание возвращено в активные! ↩️")
         parts = call.data.replace("undone_", "").rsplit("_", 1)
-        extended_subjects = list(subjects_list)
-        extended_subjects.extend([
-            "Английский язык (Елена Николаевна)",
-            "Английский язык (Лариса Николаевна)",
-        ])
+        all_subj_keys = list(user_data[user_id]["completed"].keys())
 
         if len(parts) == 2:
             try:
                 subj_idx = int(parts[0])
                 idx = int(parts[1])
-                s = extended_subjects[subj_idx]
+                s = all_subj_keys[subj_idx]
                 completed_list = user_data[user_id]["completed"][s]
                 if idx < len(completed_list):
                     task_info = completed_list.pop(idx)
@@ -941,16 +826,11 @@ def callback_query(call):
         has_completed = False
         markup = types.InlineKeyboardMarkup()
 
-        user_group = user_data[user_id]["eng_group"]
-
         for s, tasks in user_data[user_id]["completed"].items():
-            if s.startswith("Английский язык") and s != f"Английский язык ({user_group})":
-                continue
-
             if tasks:
                 has_completed = True
                 for i, t_info in enumerate(tasks, 1):
-                    subj_idx = extended_subjects.index(s)
+                    subj_idx = all_subj_keys.index(s)
                     text += f"✅ Предмет: {s}\n"
                     text += f"📅 Дата: {t_info['date']}\n"
                     text += f"📝 Задание: {t_info['text']}\n\n"
@@ -1001,45 +881,11 @@ def callback_query(call):
         subj_idx = int(call.data.replace("sub_", ""))
         selected_subject = subjects_list[subj_idx]
 
-        if selected_subject == "Английский язык":
-            markup = types.InlineKeyboardMarkup()
-            markup.row(
-                types.InlineKeyboardButton("👩‍🏫 Елена Николаевна", callback_data="eng_group_Елена Николаевна"),
-                types.InlineKeyboardButton("👩‍🏫 Лариса Николаевна", callback_data="eng_group_Лариса Николаевна")
-            )
-            markup.row(types.InlineKeyboardButton("🏠 На главную", callback_data="go_home"))
-            try:
-                bot.edit_message_text(
-                    "🇬🇧 Выбери подгруппу по английскому языку:",
-                    chat_id,
-                    message_id,
-                    reply_markup=markup,
-                )
-            except Exception as e:
-                if "message is not modified" not in str(e):
-                    pass
-        else:
-            user_data[user_id]["target_subject"] = selected_subject
-            user_data[user_id]["step"] = "waiting_date"
-            markup = types.InlineKeyboardMarkup()
-            markup.row(types.InlineKeyboardButton("🏠 На главную", callback_data="go_home"))
-            prompt_text = f"📅 Введи дату сдачи для предмета {selected_subject} (например 9.9 или 9.9.2026):"
-            try:
-                bot.edit_message_text(prompt_text, chat_id, message_id, reply_markup=markup)
-            except Exception as e:
-                if "message is not modified" not in str(e):
-                    pass
-
-    elif call.data.startswith("eng_group_"):
-        bot.answer_callback_query(call.id)
-        teacher = call.data.replace("eng_group_", "")
-        selected_subject = f"Английский язык ({teacher})"
         user_data[user_id]["target_subject"] = selected_subject
         user_data[user_id]["step"] = "waiting_date"
-
         markup = types.InlineKeyboardMarkup()
         markup.row(types.InlineKeyboardButton("🏠 На главную", callback_data="go_home"))
-        prompt_text = f"📅 Введи дату сдачи для предмета {selected_subject} (например 9.9):"
+        prompt_text = f"📅 Введи дату сдачи для предмета {selected_subject} (например 9.9 или 9.9.2026):"
         try:
             bot.edit_message_text(prompt_text, chat_id, message_id, reply_markup=markup)
         except Exception as e:
@@ -1051,18 +897,15 @@ def callback_query(call):
         text = "🗑 Выберите задание для удаления:\n\n"
         markup = types.InlineKeyboardMarkup()
         has_any_tasks = False
-        extended_subjects = list(subjects_list)
-        extended_subjects.extend([
-            "Английский язык (Елена Николаевна)",
-            "Английский язык (Лариса Николаевна)",
-        ])
+        
+        all_subj_keys = list(homework_storage.keys())
 
-        for subj in extended_subjects:
+        for subj in all_subj_keys:
             tasks = homework_storage[subj]
             if tasks:
                 has_any_tasks = True
                 for i, t_info in enumerate(tasks, 1):
-                    subj_idx = extended_subjects.index(subj)
+                    subj_idx = all_subj_keys.index(subj)
                     text += f"• {subj} ({t_info['date']}): {t_info['text']}\n"
                     markup.row(
                         types.InlineKeyboardButton(f"❌ Удалить: {subj} ({i})", callback_data=f"del_{subj_idx}_{i - 1}"))
@@ -1079,36 +922,32 @@ def callback_query(call):
     elif call.data.startswith("del_"):
         bot.answer_callback_query(call.id, "Задание удалено! 🗑")
         parts = call.data.replace("del_", "").rsplit("_", 1)
-        extended_subjects = list(subjects_list)
-        extended_subjects.extend([
-            "Английский язык (Елена Николаевна)",
-            "Английский язык (Лариса Николаевна)",
-        ])
+        all_subj_keys = list(homework_storage.keys())
 
         if len(parts) == 2:
             try:
                 subj_idx = int(parts[0])
                 idx = int(parts[1])
-                subj = extended_subjects[subj_idx]
+                subj = all_subj_keys[subj_idx]
                 if idx < len(homework_storage[subj]):
                     removed_task = homework_storage[subj].pop(idx)
                     delete_homework_from_db(subj, removed_task["date"], removed_task["text"])
                 for uid in user_data:
-                    if idx < len(user_data[uid]["active"][subj]):
+                    if subj in user_data[uid]["active"] and idx < len(user_data[uid]["active"][subj]):
                         user_data[uid]["active"][subj].pop(idx)
-                    elif idx < len(user_data[uid]["completed"][subj]):
+                    elif subj in user_data[uid]["completed"] and idx < len(user_data[uid]["completed"][subj]):
                         user_data[uid]["completed"][subj].pop(idx)
             except ValueError:
                 pass
         text = "🗑 Выберите задание для удаления:\n\n"
         markup = types.InlineKeyboardMarkup()
         has_any_tasks = False
-        for subj in extended_subjects:
+        for subj in all_subj_keys:
             tasks = homework_storage[subj]
             if tasks:
                 has_any_tasks = True
                 for i, t_info in enumerate(tasks, 1):
-                    subj_idx = extended_subjects.index(subj)
+                    subj_idx = all_subj_keys.index(subj)
                     text += f"• {subj} ({t_info['date']}): {t_info['text']}\n"
                     markup.row(
                         types.InlineKeyboardButton(f"❌ Удалить: {subj} ({i})", callback_data=f"del_{subj_idx}_{i - 1}"))
@@ -1336,15 +1175,21 @@ def handle_incoming_content(message):
         }
 
         add_homework_to_db(subject, date_val, text, file_id, file_type)
+        if subject not in homework_storage:
+            homework_storage[subject] = []
         homework_storage[subject].append(task_info)
+        
         for uid in user_data:
+            if subject not in user_data[uid]["active"]:
+                user_data[uid]["active"][subject] = []
+                user_data[uid]["completed"][subject] = []
             user_data[uid]["active"][subject].append(task_info)
 
         success_text = f"✅ ДЗ успешно добавлено!\n\nПредмет: {subject}\nДата: {date_val}\nЗадание: {text}"
         markup = types.InlineKeyboardMarkup()
         markup.row(types.InlineKeyboardButton("🏠 На главную", callback_data="go_home"))
 
-        menu_id = user_data[user_id]["current_msg_id"]
+        menu_id = user_data[user_id].get("current_msg_id")
         if menu_id:
             try:
                 bot.edit_message_text(success_text, chat_id, menu_id, reply_markup=markup)
@@ -1368,7 +1213,7 @@ if __name__ == "__main__":
     if client:
         try:
             test_resp = client.models.generate_content(
-                model='gemini-3.8-flash',
+                model='gemini-2.5-flash',
                 contents='Ответь словом "ОК", если видишь этот запрос'
             )
             print(f"ТЕСТ GEMINI API УСПЕШЕН: {test_resp.text}")
