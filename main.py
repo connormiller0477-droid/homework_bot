@@ -36,7 +36,9 @@ def run_web_server():
 threading.Thread(target=run_web_server, daemon=True).start()
 # -------------------------------------------------------------------------
 
-TOKEN = "8797963662:AAFrRZyCZbQ029Z8XnrypHzoBm3iOzRl33s"
+TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
+if not TOKEN:
+    raise RuntimeError("Переменная окружения TELEGRAM_BOT_TOKEN не задана!")
 bot = telebot.TeleBot(TOKEN)
 
 # Безопасная инициализация клиента Gemini API через переменную окружения Render
@@ -217,67 +219,130 @@ def clean_old_homeworks(user_id):
 
 
 def analyze_images_with_gemini(photo_bytes_list):
-    """Отправляем скриншоты в исходном качестве без сжатия[cite: 8]."""
+    """Распознаёт задания на скриншотах через Gemini, не меняя выбранную модель."""
     print("--- ЗАПУСК АНАЛИЗА GEMINI ---")
 
     if not client:
-        print("❌ ОШИБКА: Клиент Gemini равен None! Переменная GEMINI_API_KEY на Render не найдена.")
+        print("❌ GEMINI_API_KEY не задан в переменных окружения.")
         return []
 
+    if not photo_bytes_list:
+        print("❌ Список скриншотов пуст.")
+        return []
+
+    # Передаём оригинальные байты изображения с корректным MIME-типом.
     contents = []
-    for b in photo_bytes_list:
+    mime_by_format = {
+        "JPEG": "image/jpeg",
+        "JPG": "image/jpeg",
+        "PNG": "image/png",
+        "WEBP": "image/webp",
+        "GIF": "image/gif",
+        "BMP": "image/bmp",
+    }
+
+    for index, image_bytes in enumerate(photo_bytes_list, start=1):
         try:
-            pil_img = Image.open(io.BytesIO(b))
-            contents.append(pil_img)
-        except Exception as img_err:
-            print(f"Ошибка открытия картинки: {img_err}")
+            with Image.open(io.BytesIO(image_bytes)) as img:
+                image_format = (img.format or "").upper()
+                mime_type = mime_by_format.get(image_format)
+                if not mime_type:
+                    raise ValueError(f"Неподдерживаемый формат изображения: {image_format or 'неизвестен'}")
+                img.verify()
+
             contents.append(
-                genai_types.Part.from_bytes(
-                    data=b,
-                    mime_type="image/jpeg",
-                )
+                genai_types.Part.from_bytes(data=image_bytes, mime_type=mime_type)
             )
+            print(f"✅ Скриншот #{index} подготовлен ({mime_type}, {len(image_bytes)} байт).")
+        except Exception as img_err:
+            print(f"❌ Скриншот #{index} пропущен: {img_err}")
 
-    prompt = """
-    Проанализируй скриншоты школьного электронного дневника.
-    Найди все домашние задания.
+    if not contents:
+        print("❌ Не удалось подготовить ни одного изображения.")
+        return []
 
-    Инструкции по разбору:
-    1. Предмет: Возьми название предмета ровно так, как оно написано на скриншоте (например, "Иностранный язык (английский)", "Алгебра", "История" и т.д.).
-    2. Дата: Найди дату сдачи задания (например, "на среду, 21 октября"). Переведи её в формат ДД.ММ.ГГГГ (текущий год 2026, например "21.10.2026"). Не путай с датой публикации!
-    3. Задание: Извлеки текст задания (например, "стр 20 упр 5..."). Игнорируй тему урока.
+    current_year = datetime.now().year
+    prompt = f"""
+Проанализируй прикреплённые скриншоты школьного электронного дневника.
+Найди все домашние задания, которые явно указаны на скриншотах.
 
-    Верни ответ СТРОГО в формате JSON без какого-либо другого текста, разметки или пояснений:
-    [
-      {"subject": "Иностранный язык (английский)", "date": "21.10.2026", "text": "стр 20 упр 5"}
-    ]
+Правила:
+1. subject — название школьного предмета, как оно написано на скриншоте.
+2. date — дата сдачи задания, а не дата публикации. Верни дату в формате ДД.ММ.ГГГГ.
+   Если на скриншоте указан день недели и дата без года, используй {current_year}.
+   Не выдумывай дату, если её невозможно определить: в таком случае пропусти задание.
+3. text — текст домашнего задания. Не включай тему урока, если она не является заданием.
+4. Не дублируй одно и то же задание, если оно повторяется на нескольких скриншотах.
+5. Не придумывай данные, которых нет на изображениях.
 
-    Если заданий не найдено, верни: []
-    """
-    contents.append(prompt)
+Верни только JSON-массив объектов следующего вида:
+[
+  {{"subject": "Алгебра", "date": "21.10.{current_year}", "text": "стр. 20, упражнение 5"}}
+]
+Если заданий нет, верни [].
+"""
 
     try:
-        print("⏳ Отправка запроса в Gemini API...")
-        # Возвращаем модель gemini-3.8-flash по вашему требованию
+        print(f"⏳ Отправка {len(contents)} изображений в Gemini (модель gemini-3.8-flash)...")
         response = client.models.generate_content(
-            model='gemini-3.8-flash',
-            contents=contents,
+            model="gemini-3.8-flash",
+            contents=contents + [prompt],
+            config=genai_types.GenerateContentConfig(
+                response_mime_type="application/json",
+                temperature=0.1,
+            ),
         )
-        print(f"📥 ОТВЕТ ОТ GEMINI (RAW):\n{response.text}")
 
-        cleaned_text = response.text.strip()
-        if "```" in cleaned_text:
-            cleaned_text = cleaned_text.split("```")[1]
-            if cleaned_text.startswith("json"):
-                cleaned_text = cleaned_text[4:]
-        cleaned_text = cleaned_text.strip()
+        response_text = getattr(response, "text", None)
+        if not response_text or not response_text.strip():
+            print("❌ Gemini вернула пустой ответ.")
+            print(f"Причина завершения ответа: {getattr(response, 'prompt_feedback', None)}")
+            return []
+
+        print(f"📥 Ответ Gemini получен ({len(response_text)} символов).")
+        cleaned_text = response_text.strip()
+
+        # На случай, если модель всё-таки добавила Markdown-обрамление.
+        if cleaned_text.startswith("```"):
+            cleaned_text = cleaned_text.split("\n", 1)[-1]
+            if cleaned_text.rstrip().endswith("```"):
+                cleaned_text = cleaned_text.rstrip()[:-3].strip()
 
         tasks = json.loads(cleaned_text)
-        if isinstance(tasks, list):
-            print(f"✅ Успешно распарсено заданий: {len(tasks)}")
-            return tasks
+        if not isinstance(tasks, list):
+            raise ValueError("Ответ Gemini — JSON, но это не список.")
+
+        valid_tasks = []
+        for item in tasks:
+            if not isinstance(item, dict):
+                continue
+            subject = str(item.get("subject", "")).strip()
+            date_val = str(item.get("date", "")).strip()
+            task_text = str(item.get("text", "")).strip()
+            if not (subject and date_val and task_text):
+                print(f"⚠️ Пропущен неполный элемент: {item}")
+                continue
+            # Проверяем, что дата действительно разбирается.
+            try:
+                parsed_date = parse_flexible_date(date_val)
+                date_val = parsed_date.strftime("%d.%m.%Y")
+            except (ValueError, TypeError):
+                print(f"⚠️ Пропущено задание с неверной датой: {item}")
+                continue
+            valid_tasks.append({
+                "subject": subject,
+                "date": date_val,
+                "text": task_text,
+            })
+
+        print(f"✅ Успешно распознано заданий: {len(valid_tasks)}")
+        return valid_tasks
+
+    except json.JSONDecodeError as e:
+        print(f"❌ Gemini вернула некорректный JSON: {e}")
+        print(f"Ответ для диагностики: {getattr(response, 'text', '')[:1000] if 'response' in locals() else 'ответ отсутствует'}")
     except Exception as e:
-        print(f"❌ ОШИБКА при запросе или обработке ответа Gemini: {e}")
+        print(f"❌ Ошибка Gemini API или обработки изображения: {type(e).__name__}: {e}")
 
     return []
 
