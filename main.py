@@ -227,7 +227,6 @@ def analyze_images_with_gemini(photo_bytes_list):
     contents = []
     for b in photo_bytes_list:
         try:
-            # Передаем байты напрямую как изображение без потери качества и изменения размера PIL
             pil_img = Image.open(io.BytesIO(b))
             contents.append(pil_img)
         except Exception as img_err:
@@ -259,8 +258,9 @@ def analyze_images_with_gemini(photo_bytes_list):
 
     try:
         print("⏳ Отправка запроса в Gemini API...")
+        # Возвращаем модель gemini-3.8-flash по вашему требованию
         response = client.models.generate_content(
-            model='gemini-2.5-flash',
+            model='gemini-3.8-flash',
             contents=contents,
         )
         print(f"📥 ОТВЕТ ОТ GEMINI (RAW):\n{response.text}")
@@ -1189,7 +1189,7 @@ def handle_incoming_content(message):
         markup = types.InlineKeyboardMarkup()
         markup.row(types.InlineKeyboardButton("🏠 На главную", callback_data="go_home"))
 
-        menu_id = user_data[user_id].get("current_msg_id")
+        menu_id = user_data[user_id]["current_msg_id"]
         if menu_id:
             try:
                 bot.edit_message_text(success_text, chat_id, menu_id, reply_markup=markup)
@@ -1213,7 +1213,7 @@ if __name__ == "__main__":
     if client:
         try:
             test_resp = client.models.generate_content(
-                model='gemini-2.5-flash',
+                model='gemini-3.8-flash',
                 contents='Ответь словом "ОК", если видишь этот запрос'
             )
             print(f"ТЕСТ GEMINI API УСПЕШЕН: {test_resp.text}")
