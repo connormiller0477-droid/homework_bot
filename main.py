@@ -220,7 +220,7 @@ def clean_old_homeworks(user_id):
 
 
 def analyze_images_with_gemini(photo_bytes_list):
-    """Отправляем сжатые скриншоты в Gemini для быстрого извлечения домашнего задания."""
+    """Отправляем сжатые скриншоты в Gemini для быстрого извлечения домашнего задания[cite: 8]."""
     print("--- ЗАПУСК АНАЛИЗА GEMINI ---")
 
     if not client:
@@ -336,6 +336,11 @@ def send_welcome(message):
     user_data[user_id]["temp_date"] = None
     user_data[user_id]["editing_task_idx"] = None
     user_data[user_id]["ocr_photos"] = []
+
+    try:
+        bot.delete_message(message.chat.id, message.message_id)
+    except Exception:
+        pass
 
     msg = bot.send_message(
         message.chat.id,
@@ -1143,22 +1148,10 @@ def handle_incoming_content(message):
     clean_old_homeworks(user_id)
     chat_id = message.chat.id
     text = message.text or message.caption or ""
+    step = user_data[user_id].get("step")
 
-    if user_data[user_id].get("step") == "editing_ocr_text":
-        idx = user_data[user_id].get("editing_task_idx")
-        if idx is not None and 0 <= idx < len(user_data[user_id]["ocr_parsed_tasks"]):
-            user_data[user_id]["ocr_parsed_tasks"][idx]["text"] = text.strip()
-
-        user_data[user_id]["step"] = None
-        user_data[user_id]["editing_task_idx"] = None
-
-        menu_id = user_data[user_id].get("current_msg_id")
-        if menu_id:
-            show_ocr_results(chat_id, menu_id, user_id)
-        return
-
-    # Сбор фото для OCR без удаления сообщений
-    if user_data[user_id].get("step") == "collecting_ocr_photos" and message.photo:
+    # 1. Сбор фотографий для OCR (НЕ удаляем фото, так как они нужны нейросети)
+    if step == "collecting_ocr_photos" and message.photo:
         try:
             file_info = bot.get_file(message.photo[-1].file_id)
             downloaded_bytes = bot.download_file(file_info.file_path)
@@ -1189,7 +1182,32 @@ def handle_incoming_content(message):
         user_data[user_id]["current_msg_id"] = msg.message_id
         return
 
+    # 2. Редактирование текста задачи из OCR
+    if step == "editing_ocr_text":
+        try:
+            bot.delete_message(chat_id, message.message_id)
+        except Exception:
+            pass
+
+        idx = user_data[user_id].get("editing_task_idx")
+        if idx is not None and 0 <= idx < len(user_data[user_id]["ocr_parsed_tasks"]):
+            user_data[user_id]["ocr_parsed_tasks"][idx]["text"] = text.strip()
+
+        user_data[user_id]["step"] = None
+        user_data[user_id]["editing_task_idx"] = None
+
+        menu_id = user_data[user_id].get("current_msg_id")
+        if menu_id:
+            show_ocr_results(chat_id, menu_id, user_id)
+        return
+
+    # 3. Ввод секретного кода старосты
     if text.strip() == SECRET_CODE:
+        try:
+            bot.delete_message(chat_id, message.message_id)
+        except Exception:
+            pass
+
         user_data[user_id]["target_subject"] = None
         user_data[user_id]["step"] = None
         starosta_text = "👨‍🏫 Добро пожаловать в режим старосты!"
@@ -1209,12 +1227,18 @@ def handle_incoming_content(message):
                     pass
         msg = bot.send_message(chat_id, starosta_text, reply_markup=markup)
         user_data[user_id]["current_msg_id"] = msg.message_id
+        return
 
-    elif user_data[user_id].get("step") == "waiting_date":
+    # 4. Ожидание даты при ручном добавлении
+    if step == "waiting_date":
         date_text = text.strip()
         try:
             parsed_date = parse_flexible_date(date_text)
             if parsed_date < datetime.now().date():
+                try:
+                    bot.delete_message(chat_id, message.message_id)
+                except Exception:
+                    pass
                 error_text = "❌ Ошибка! Нельзя добавить домашку на прошедший день. Введите актуальную дату:"
                 markup = types.InlineKeyboardMarkup()
                 markup.row(types.InlineKeyboardButton("🏠 На главную", callback_data="go_home"))
@@ -1230,6 +1254,10 @@ def handle_incoming_content(message):
                 user_data[user_id]["current_msg_id"] = msg.message_id
                 return
         except ValueError:
+            try:
+                bot.delete_message(chat_id, message.message_id)
+            except Exception:
+                pass
             error_text = "❌ Неверный формат даты. Введите в формате ДД.ММ.ГГГГ или ДД.ММ (можно без нулей):"
             markup = types.InlineKeyboardMarkup()
             markup.row(types.InlineKeyboardButton("🏠 На главную", callback_data="go_home"))
@@ -1244,6 +1272,11 @@ def handle_incoming_content(message):
             msg = bot.send_message(chat_id, error_text, reply_markup=markup)
             user_data[user_id]["current_msg_id"] = msg.message_id
             return
+
+        try:
+            bot.delete_message(chat_id, message.message_id)
+        except Exception:
+            pass
 
         user_data[user_id]["temp_date"] = text
         user_data[user_id]["step"] = "waiting_text"
@@ -1261,8 +1294,15 @@ def handle_incoming_content(message):
                     pass
         msg = bot.send_message(chat_id, prompt_text, reply_markup=markup)
         user_data[user_id]["current_msg_id"] = msg.message_id
+        return
 
-    elif user_data[user_id].get("step") == "waiting_text":
+    # 5. Ожидание текста/файла задания при ручном добавлении
+    if step == "waiting_text":
+        try:
+            bot.delete_message(chat_id, message.message_id)
+        except Exception:
+            pass
+
         subject = user_data[user_id]["target_subject"]
         date_val = user_data[user_id]["temp_date"]
         user_data[user_id]["target_subject"] = None
@@ -1317,7 +1357,12 @@ def handle_incoming_content(message):
                     pass
         msg = bot.send_message(chat_id, success_text, reply_markup=markup)
         user_data[user_id]["current_msg_id"] = msg.message_id
-    else:
+        return
+
+    # 6. Если бот не ожидает никакого ввода от пользователя (обычный чат или бессмыслица) -> молча удаляем сообщение
+    try:
+        bot.delete_message(chat_id, message.message_id)
+    except Exception:
         pass
 
 
