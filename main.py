@@ -37,7 +37,7 @@ threading.Thread(target=run_web_server, daemon=True).start()
 # -------------------------------------------------------------------------
 
 # Токен твоего Telegram-бота
-TOKEN = "8879883999:AAEI89iXNZcr1_xprrVI1P7648-GzDdM1RY"
+TOKEN = "8879883999:AAEM0OKR7oUF12tpvEvkm7TKKMYovbDAh2c"
 bot = telebot.TeleBot(TOKEN)
 
 # Безопасная инициализация клиента Gemini API через переменную окружения Render
