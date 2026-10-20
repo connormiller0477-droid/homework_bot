@@ -37,7 +37,7 @@ threading.Thread(target=run_web_server, daemon=True).start()
 # -------------------------------------------------------------------------
 
 # Токен твоего Telegram-бота
-TOKEN = "import os
+TOKEN = "import os"
 import sqlite3
 from datetime import datetime, timedelta
 import telebot
