@@ -218,16 +218,15 @@ def clean_old_homeworks(user_id):
         homework_storage[subj] = filtered_global
 
 
-def analyze_images_with_gemini(photo_bytes_list):
-    """Распознаёт задания на скриншотах через Gemini, разбивая фото пачками по 2 штуки."""
-    print("--- ЗАПУСК АНАЛИЗА GEMINI (ПАКЕТНЫЙ РЕЖИМ ПО 2 ФОТО) ---")
+def analyze_images_sequentially(chat_id, message_id, photo_bytes_list, bot_instance):
+    """Последовательно анализирует фото пачками по 2 штуки, обновляя статус, и выдает итоговый результат."""
+    print("--- ЗАПУСК ПОСЛЕДОВАТЕЛЬНОГО АНАЛИЗА СКРИНШОТОВ ---")
 
     if not client:
         print("❌ GEMINI_API_KEY не задан в переменных окружения.")
         return []
 
     if not photo_bytes_list:
-        print("❌ Список скриншотов пуст.")
         return []
 
     mime_by_format = {
@@ -241,36 +240,40 @@ def analyze_images_with_gemini(photo_bytes_list):
 
     all_valid_tasks = []
     batch_size = 2
+    total_batches = (len(photo_bytes_list) + batch_size - 1) // batch_size
 
-    # Разбиваем весь список скриншотов на пачки по 2 штуки
     for batch_idx, i in enumerate(range(0, len(photo_bytes_list), batch_size), start=1):
-        batch_photos = photo_bytes_list[i:i + batch_size]
-        print(f"📦 Обработка пачки #{batch_idx} (скриншоты {i+1} - {i+len(batch_photos)})...")
+        # Обновляем статус в чате для пользователя о текущем прогрессе пачек
+        status_text = f"⏳ Нейросеть обрабатывает пачку {batch_idx} из {total_batches}..."
+        try:
+            bot_instance.edit_message_text(status_text, chat_id, message_id)
+        except Exception:
+            pass
 
+        batch_photos = photo_bytes_list[i:i + batch_size]
         contents = []
+
         for index, image_bytes in enumerate(batch_photos, start=1):
             try:
                 with Image.open(io.BytesIO(image_bytes)) as img:
                     image_format = (img.format or "").upper()
                     mime_type = mime_by_format.get(image_format)
                     if not mime_type:
-                        raise ValueError(f"Неподдерживаемый формат изображения: {image_format or 'неизвестен'}")
+                        raise ValueError(f"Неподдерживаемый формат: {image_format}")
                     img.verify()
 
                 contents.append(
                     genai_types.Part.from_bytes(data=image_bytes, mime_type=mime_type)
                 )
-                print(f"  ✅ Фото в пачке #{index} подготовлено ({mime_type}, {len(image_bytes)} байт).")
             except Exception as img_err:
-                print(f"  ❌ Ошибка подготовки фото в пачке: {img_err}")
+                print(f"❌ Ошибка подготовки фото: {img_err}")
 
         if not contents:
-            print(f"⚠️ Пачка #{batch_idx} пропущена, нет валидных изображений.")
             continue
 
         current_year = datetime.now().year
         prompt = f"""
-Проанализируй прикреплённые скриншоты школьного электронного дневника (пачка {batch_idx}).
+Проанализируй прикреплённые скриншоты школьного электронного дневника (пачка {batch_idx} из {total_batches}).
 Найди все домашние задания, которые явно указаны на скриншотах.
 
 Правила:
@@ -290,7 +293,6 @@ def analyze_images_with_gemini(photo_bytes_list):
 """
 
         try:
-            print(f"⏳ Отправка пачки #{batch_idx} в Gemini (модель gemini-3.5-flash)...")
             response = client.models.generate_content(
                 model="gemini-3.5-flash",
                 contents=contents + [prompt],
@@ -302,7 +304,6 @@ def analyze_images_with_gemini(photo_bytes_list):
 
             response_text = getattr(response, "text", None)
             if not response_text or not response_text.strip():
-                print(f"⚠️ Пачка #{batch_idx}: Gemini вернула пустой ответ.")
                 continue
 
             cleaned_text = response_text.strip()
@@ -329,17 +330,14 @@ def analyze_images_with_gemini(photo_bytes_list):
                 except (ValueError, TypeError):
                     continue
                 
-                # Добавляем задачу, избегая дубликатов между разными пачками
                 new_task = {"subject": subject, "date": date_val, "text": task_text}
                 if new_task not in all_valid_tasks:
                     all_valid_tasks.append(new_task)
 
-            print(f"✅ Пачка #{batch_idx} успешно обработана.")
-
         except Exception as e:
-            print(f"❌ Ошибка в пачке #{batch_idx} при запросе к Gemini: {type(e).__name__}: {e}")
+            print(f"❌ Ошибка в пачке #{batch_idx}: {e}")
 
-    print(f"🎉 Итого распознано уникальных заданий со всех пачек: {len(all_valid_tasks)}")
+    print(f"🎉 Полный анализ завершен. Найдено уникальных заданий: {len(all_valid_tasks)}")
     return all_valid_tasks
 
 
@@ -347,7 +345,7 @@ def show_ocr_results(chat_id, message_id, user_id):
     parsed_tasks = user_data[user_id].get("ocr_parsed_tasks", [])
     markup = types.InlineKeyboardMarkup()
     if parsed_tasks:
-        text = "🤖 **Нейросеть проанализировала скриншоты и нашла задания:**\n\n"
+        text = f"🤖 **Нейросеть проанализировала все скриншоты и нашла заданий: {len(parsed_tasks)}**\n\n"
         for idx, item in enumerate(parsed_tasks):
             text += f"{idx + 1}. Предмет: {item['subject']}\n"
             text += f"Дата: {item['date']}\n"
@@ -534,7 +532,7 @@ def callback_query(call):
         bot.answer_callback_query(call.id, "Запускаю нейросеть...")
 
         try:
-            bot.edit_message_text("⏳ Нейросеть изучает скриншоты пачками... Это займет несколько секунд.", chat_id, message_id)
+            bot.edit_message_text("⏳ Запуск анализа скриншотов...", chat_id, message_id)
         except Exception as e:
             if "message is not modified" not in str(e):
                 pass
@@ -545,7 +543,7 @@ def callback_query(call):
             pass
 
         photo_bytes_list = user_data[user_id].get("ocr_photos", [])
-        parsed_tasks = analyze_images_with_gemini(photo_bytes_list)
+        parsed_tasks = analyze_images_sequentially(chat_id, message_id, photo_bytes_list, bot)
 
         user_data[user_id]["ocr_parsed_tasks"] = parsed_tasks
         show_ocr_results(chat_id, message_id, user_id)
