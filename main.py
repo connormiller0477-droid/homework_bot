@@ -218,9 +218,9 @@ def clean_old_homeworks(user_id):
         homework_storage[subj] = filtered_global
 
 
-def analyze_images_sequentially(chat_id, message_id, photo_bytes_list, bot_instance):
-    """Последовательно анализирует фото пачками по 2 штуки, обновляя статус, и выдает итоговый результат."""
-    print("--- ЗАПУСК ПОСЛЕДОВАТЕЛЬНОГО АНАЛИЗА СКРИНШОТОВ ---")
+def analyze_images_separately(chat_id, message_id, photo_bytes_list, bot_instance):
+    """Анализирует каждое фото строго по отдельности, обновляет статус и возвращает общий список."""
+    print("--- ЗАПУСК ПОЭТАПНОГО АНАЛИЗА КАЖДОГО ФОТО ОТДЕЛЬНО ---")
 
     if not client:
         print("❌ GEMINI_API_KEY не задан в переменных окружения.")
@@ -239,42 +239,33 @@ def analyze_images_sequentially(chat_id, message_id, photo_bytes_list, bot_insta
     }
 
     all_valid_tasks = []
-    batch_size = 2
-    total_batches = (len(photo_bytes_list) + batch_size - 1) // batch_size
+    total_photos = len(photo_bytes_list)
 
-    for batch_idx, i in enumerate(range(0, len(photo_bytes_list), batch_size), start=1):
-        # Обновляем статус в чате для пользователя о текущем прогрессе пачек
-        status_text = f"⏳ Нейросеть обрабатывает пачку {batch_idx} из {total_batches}..."
+    for idx, image_bytes in enumerate(photo_bytes_list, start=1):
+        # Выводим прогресс для каждого отдельного фото
+        status_text = f"⏳ Обработка фото {idx} из {total_photos}..."
         try:
             bot_instance.edit_message_text(status_text, chat_id, message_id)
         except Exception:
             pass
 
-        batch_photos = photo_bytes_list[i:i + batch_size]
-        contents = []
+        try:
+            with Image.open(io.BytesIO(image_bytes)) as img:
+                image_format = (img.format or "").upper()
+                mime_type = mime_by_format.get(image_format)
+                if not mime_type:
+                    raise ValueError(f"Неподдерживаемый формат: {image_format}")
+                img.verify()
 
-        for index, image_bytes in enumerate(batch_photos, start=1):
-            try:
-                with Image.open(io.BytesIO(image_bytes)) as img:
-                    image_format = (img.format or "").upper()
-                    mime_type = mime_by_format.get(image_format)
-                    if not mime_type:
-                        raise ValueError(f"Неподдерживаемый формат: {image_format}")
-                    img.verify()
-
-                contents.append(
-                    genai_types.Part.from_bytes(data=image_bytes, mime_type=mime_type)
-                )
-            except Exception as img_err:
-                print(f"❌ Ошибка подготовки фото: {img_err}")
-
-        if not contents:
+            image_part = genai_types.Part.from_bytes(data=image_bytes, mime_type=mime_type)
+        except Exception as img_err:
+            print(f"❌ Ошибка подготовки фото #{idx}: {img_err}")
             continue
 
         current_year = datetime.now().year
         prompt = f"""
-Проанализируй прикреплённые скриншоты школьного электронного дневника (пачка {batch_idx} из {total_batches}).
-Найди все домашние задания, которые явно указаны на скриншотах.
+Проанализируй прикреплённый скриншот школьного электронного дневника (фото {idx} из {total_photos}).
+Найди все домашние задания, которые явно указаны на этом изображении.
 
 Правила:
 1. subject — название школьного предмета, как оно написано на скриншоте.
@@ -282,8 +273,7 @@ def analyze_images_sequentially(chat_id, message_id, photo_bytes_list, bot_insta
    Если на скриншоте указан день недели и дата без года, используй {current_year}.
    Не выдумывай дату, если её невозможно определить: в таком случае пропусти задание.
 3. text — текст домашнего задания. Не включай тему урока, если она не является заданием.
-4. Не дублируй одно и то же задание, если оно повторяется на нескольких скриншотах.
-5. Не придумывай данные, которых нет на изображениях.
+4. Не придумывай данные, которых нет на изображении.
 
 Верни только JSON-массив объектов следующего вида:
 [
@@ -295,7 +285,7 @@ def analyze_images_sequentially(chat_id, message_id, photo_bytes_list, bot_insta
         try:
             response = client.models.generate_content(
                 model="gemini-3.5-flash",
-                contents=contents + [prompt],
+                contents=[image_part, prompt],
                 config=genai_types.GenerateContentConfig(
                     response_mime_type="application/json",
                     temperature=0.1,
@@ -335,9 +325,9 @@ def analyze_images_sequentially(chat_id, message_id, photo_bytes_list, bot_insta
                     all_valid_tasks.append(new_task)
 
         except Exception as e:
-            print(f"❌ Ошибка в пачке #{batch_idx}: {e}")
+            print(f"❌ Ошибка при обработке фото #{idx}: {e}")
 
-    print(f"🎉 Полный анализ завершен. Найдено уникальных заданий: {len(all_valid_tasks)}")
+    print(f"🎉 Полный анализ завершен. Всего найдено уникальных заданий: {len(all_valid_tasks)}")
     return all_valid_tasks
 
 
@@ -345,7 +335,7 @@ def show_ocr_results(chat_id, message_id, user_id):
     parsed_tasks = user_data[user_id].get("ocr_parsed_tasks", [])
     markup = types.InlineKeyboardMarkup()
     if parsed_tasks:
-        text = f"🤖 **Нейросеть проанализировала все скриншоты и нашла заданий: {len(parsed_tasks)}**\n\n"
+        text = f"🤖 **Нейросеть проанализировала все фото отдельно и нашла заданий: {len(parsed_tasks)}**\n\n"
         for idx, item in enumerate(parsed_tasks):
             text += f"{idx + 1}. Предмет: {item['subject']}\n"
             text += f"Дата: {item['date']}\n"
@@ -532,7 +522,7 @@ def callback_query(call):
         bot.answer_callback_query(call.id, "Запускаю нейросеть...")
 
         try:
-            bot.edit_message_text("⏳ Запуск анализа скриншотов...", chat_id, message_id)
+            bot.edit_message_text("⏳ Запуск анализа каждого фото по отдельности...", chat_id, message_id)
         except Exception as e:
             if "message is not modified" not in str(e):
                 pass
@@ -543,7 +533,7 @@ def callback_query(call):
             pass
 
         photo_bytes_list = user_data[user_id].get("ocr_photos", [])
-        parsed_tasks = analyze_images_sequentially(chat_id, message_id, photo_bytes_list, bot)
+        parsed_tasks = analyze_images_separately(chat_id, message_id, photo_bytes_list, bot)
 
         user_data[user_id]["ocr_parsed_tasks"] = parsed_tasks
         show_ocr_results(chat_id, message_id, user_id)
