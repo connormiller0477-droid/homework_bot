@@ -219,7 +219,7 @@ def clean_old_homeworks(user_id):
 
 
 def analyze_images_with_gemini(photo_bytes_list):
-    """Распознаёт задания на скриншотах через Gemini, не меняя выбранную модель."""
+    """Распознаёт задания на скриншотах через Gemini."""
     print("--- ЗАПУСК АНАЛИЗА GEMINI ---")
 
     if not client:
@@ -283,9 +283,9 @@ def analyze_images_with_gemini(photo_bytes_list):
 """
 
     try:
-        print(f"⏳ Отправка {len(contents)} изображений в Gemini (модель gemini-2.5-flash)...")
+        print(f"⏳ Отправка {len(contents)} изображений в Gemini (модель gemini-3.8-flash)...")
         response = client.models.generate_content(
-            model="gemini-2.5-flash",
+            model="gemini-3.8-flash",
             contents=contents + [prompt],
             config=genai_types.GenerateContentConfig(
                 response_mime_type="application/json",
@@ -302,7 +302,7 @@ def analyze_images_with_gemini(photo_bytes_list):
         print(f"📥 Ответ Gemini получен ({len(response_text)} символов).")
         cleaned_text = response_text.strip()
 
-        # На случай, если модель всё-таки добавила Markdown-обрамление.
+        # На случай, если модель добавила Markdown-обрамление.
         if cleaned_text.startswith("```"):
             cleaned_text = cleaned_text.split("\n", 1)[-1]
             if cleaned_text.rstrip().endswith("```"):
@@ -322,7 +322,6 @@ def analyze_images_with_gemini(photo_bytes_list):
             if not (subject and date_val and task_text):
                 print(f"⚠️ Пропущен неполный элемент: {item}")
                 continue
-            # Проверяем, что дата действительно разбирается.
             try:
                 parsed_date = parse_flexible_date(date_val)
                 date_val = parsed_date.strftime("%d.%m.%Y")
@@ -391,8 +390,6 @@ def send_welcome(message):
     user_data[user_id]["temp_date"] = None
     user_data[user_id]["editing_task_idx"] = None
     user_data[user_id]["ocr_photos"] = []
-
-    # Сообщение пользователя /start НЕ удаляется
 
     msg = bot.send_message(
         message.chat.id,
@@ -1278,7 +1275,7 @@ if __name__ == "__main__":
     if client:
         try:
             test_resp = client.models.generate_content(
-                model='gemini-2.5-flash',
+                model='gemini-3.8-flash',
                 contents='Ответь словом "ОК", если видишь этот запрос'
             )
             print(f"ТЕСТ GEMINI API УСПЕШЕН: {test_resp.text}")
