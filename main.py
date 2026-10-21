@@ -182,6 +182,8 @@ def init_user(user_id):
             "temp_date": None,
             "eng_group": None,
             "ocr_photos": [],
+            "ocr_photo_msg_ids": [],  # ID сообщений с присланными пользователем фото
+            "ocr_log_msg_ids": [],    # ID технических сообщений-логов
             "ocr_parsed_tasks": [],
             "editing_task_idx": None,
         }
@@ -218,18 +220,49 @@ def clean_old_homeworks(user_id):
         homework_storage[subj] = filtered_global
 
 
-def analyze_all_images_at_once_with_chat_logs(chat_id, message_id, photo_bytes_list, bot_instance):
-    """Пакетный анализ с выводом всех шагов и сырого ответа нейросети прямо в чат Telegram."""
+def clear_technical_ocr_messages(chat_id, user_id):
+    """Удаляет все технические сообщения (логи) и загруженные пользователем скриншоты."""
+    # 1. Удаляем присланные фото
+    photo_msg_ids = user_data[user_id].get("ocr_photo_msg_ids", [])
+    for m_id in photo_msg_ids:
+        try:
+            bot.delete_message(chat_id, m_id)
+        except Exception:
+            pass
+    user_data[user_id]["ocr_photo_msg_ids"] = []
+
+    # 2. Удаляем текстовые логи
+    log_msg_ids = user_data[user_id].get("ocr_log_msg_ids", [])
+    for m_id in log_msg_ids:
+        try:
+            bot.delete_message(chat_id, m_id)
+        except Exception:
+            pass
+    user_data[user_id]["ocr_log_msg_ids"] = []
+
+
+def send_ocr_log(chat_id, user_id, text):
+    """Вспомогательная функция отправки лога с сохранением его ID для последующего удаления."""
+    try:
+        msg = bot.send_message(chat_id, text)
+        user_data[user_id]["ocr_log_msg_ids"].append(msg.message_id)
+        return msg
+    except Exception as e:
+        print(f"Ошибка отправки лога: {e}")
+        return None
+
+
+def analyze_all_images_at_once_with_chat_logs(chat_id, message_id, photo_bytes_list, user_id, bot_instance):
+    """Пакетный анализ с сохранением ID отправляемых технических сообщений."""
     
-    # 1. Сразу отправляем в чат лог о начале подготовки
-    bot.send_message(chat_id, f"📤 [ЛОГ] Подготовка {len(photo_bytes_list)} фотографий для отправки в Gemini API...")
+    send_ocr_log(chat_id, user_id, f"📤 [ЛОГ] Подготовка {len(photo_bytes_list)} фотографий для отправки в Gemini API...")
 
     if not client:
-        bot.send_message(chat_id, "❌ [ЛОГ ОШИБКА]: GEMINI_API_KEY не задан в переменных окружения!")
+        send_ocr_log(chat_id, user_id, "❌ [ЛОГ ОШИБКА]: GEMINI_API_KEY не задан в переменной окружения!")
         return []
 
     if not photo_bytes_list:
-        bot.send_message(chat_id, "⚠️ [ЛОГ ОШИБКА]: Список фотографий пуст.")
+        send_ocr_log(chat_id, user_id, "⚠️ [ЛОГ ОШИБКА]: Список фотографий пуст.")
         return []
 
     mime_by_format = {
@@ -255,10 +288,10 @@ def analyze_all_images_at_once_with_chat_logs(chat_id, message_id, photo_bytes_l
                 genai_types.Part.from_bytes(data=image_bytes, mime_type=mime_type)
             )
         except Exception as img_err:
-            bot.send_message(chat_id, f"❌ [ЛОГ] Ошибка обработки фото #{index}: {img_err}")
+            send_ocr_log(chat_id, user_id, f"❌ [ЛОГ] Ошибка обработки фото #{index}: {img_err}")
 
     if not contents:
-        bot.send_message(chat_id, "❌ [ЛОГ] Ни одно изображение не прошло проверку. Запрос отменён.")
+        send_ocr_log(chat_id, user_id, "❌ [ЛОГ] Ни одно изображение не прошло проверку. Запрос отменён.")
         return []
 
     current_year = datetime.now().year
@@ -280,8 +313,7 @@ def analyze_all_images_at_once_with_chat_logs(chat_id, message_id, photo_bytes_l
 Если домашних заданий вообще нет, верни [].
 """
 
-    # 2. Лог перед отправкой запроса
-    bot.send_message(chat_id, f"📤 [ЛОГ] Отправка запроса с {len(contents)} изображениями в модель gemini-3.5-flash...")
+    send_ocr_log(chat_id, user_id, f"📤 [ЛОГ] Отправка запроса с {len(contents)} изображениями в Gemini API...")
 
     try:
         response = client.models.generate_content(
@@ -292,20 +324,19 @@ def analyze_all_images_at_once_with_chat_logs(chat_id, message_id, photo_bytes_l
                 temperature=0.1,
             ),
         )
-        bot.send_message(chat_id, "📥 [ЛОГ] Ответ от Gemini API успешно получен!")
+        send_ocr_log(chat_id, user_id, "📥 [ЛОГ] Ответ от Gemini API успешно получен!")
     except Exception as api_err:
-        bot.send_message(chat_id, f"❌ [ЛОГ ОШИБКА API]: {type(api_err).__name__}: {api_err}")
+        send_ocr_log(chat_id, user_id, f"❌ [ЛОГ ОШИБКА API]: {type(api_err).__name__}: {api_err}")
         return []
 
     try:
         response_text = getattr(response, "text", None)
         if not response_text or not response_text.strip():
-            bot.send_message(chat_id, "⚠️ [ЛОГ ПРЕДУПРЕЖДЕНИЕ]: Ответ от Gemini пустой!")
+            send_ocr_log(chat_id, user_id, "⚠️ [ЛОГ ПРЕДУПРЕЖДЕНИЕ]: Ответ от Gemini пустой!")
             return []
 
-        # 3. ВЫВОДИМ СЫРЙ ОТВЕТ НЕЙРОСЕТИ ПРЯМО В ЧАТ
         raw_preview = response_text[:1500] if len(response_text) > 1500 else response_text
-        bot.send_message(chat_id, f"📄 [ЛОГ СЫРЫЙ ОТВЕТ ОТ НЕЙРОСЕТИ]:\n\n{raw_preview}")
+        send_ocr_log(chat_id, user_id, f"📄 [ЛОГ СЫРЫЙ ОТВЕТ ОТ НЕЙРОСЕТИ]:\n\n{raw_preview}")
 
         cleaned_text = response_text.strip()
         if cleaned_text.startswith("```"):
@@ -313,17 +344,17 @@ def analyze_all_images_at_once_with_chat_logs(chat_id, message_id, photo_bytes_l
             if cleaned_text.rstrip().endswith("```"):
                 cleaned_text = cleaned_text.rstrip()[:-3].strip()
     except Exception as text_err:
-        bot.send_message(chat_id, f"❌ [ЛОГ ОШИБКА чтения текста]: {text_err}")
+        send_ocr_log(chat_id, user_id, f"❌ [ЛОГ ОШИБКА чтения текста]: {text_err}")
         return []
 
     all_valid_tasks = []
     try:
         tasks = json.loads(cleaned_text)
         if not isinstance(tasks, list):
-            bot.send_message(chat_id, f"⚠️ [ЛОГ] Нейросеть вернула JSON, но не список: {type(tasks)}")
+            send_ocr_log(chat_id, user_id, f"⚠️ [ЛОГ] Нейросеть вернула JSON, но не список: {type(tasks)}")
             return []
 
-        bot.send_message(chat_id, f"📋 [ЛОГ] Модель успешно выделила заданий: {len(tasks)}")
+        send_ocr_log(chat_id, user_id, f"📋 [ЛОГ] Модель успешно выделила заданий: {len(tasks)}")
 
         for item_idx, item in enumerate(tasks, start=1):
             if not isinstance(item, dict):
@@ -345,13 +376,13 @@ def analyze_all_images_at_once_with_chat_logs(chat_id, message_id, photo_bytes_l
             if new_task not in all_valid_tasks:
                 all_valid_tasks.append(new_task)
 
-        bot.send_message(chat_id, f"🎉 [ЛОГ] Анализ завершен! Успешно обработано уникальных заданий: {len(all_valid_tasks)}")
+        send_ocr_log(chat_id, user_id, f"🎉 [ЛОГ] Анализ завершен! Найдено уникальных заданий: {len(all_valid_tasks)}")
         return all_valid_tasks
 
     except json.JSONDecodeError as json_err:
-        bot.send_message(chat_id, f"❌ [ЛОГ ОШИБКА JSON]: {json_err}\nТекст: {cleaned_text[:300]}")
+        send_ocr_log(chat_id, user_id, f"❌ [ЛОГ ОШИБКА JSON]: {json_err}\nТекст: {cleaned_text[:300]}")
     except Exception as parse_err:
-        bot.send_message(chat_id, f"❌ [ЛОГ ОШИБКА обработки]: {parse_err}")
+        send_ocr_log(chat_id, user_id, f"❌ [ЛОГ ОШИБКА обработки]: {parse_err}")
 
     return []
 
@@ -395,6 +426,8 @@ def send_welcome(message):
     user_id = message.from_user.id
     init_user(user_id)
     clean_old_homeworks(user_id)
+    clear_technical_ocr_messages(message.chat.id, user_id)
+    
     user_data[user_id]["target_subject"] = None
     user_data[user_id]["step"] = None
     user_data[user_id]["temp_date"] = None
@@ -525,6 +558,8 @@ def callback_query(call):
         bot.answer_callback_query(call.id)
         user_data[user_id]["step"] = "collecting_ocr_photos"
         user_data[user_id]["ocr_photos"] = []
+        user_data[user_id]["ocr_photo_msg_ids"] = []
+        user_data[user_id]["ocr_log_msg_ids"] = []
         user_data[user_id]["ocr_parsed_tasks"] = []
         user_data[user_id]["editing_task_idx"] = None
 
@@ -547,23 +582,27 @@ def callback_query(call):
         bot.answer_callback_query(call.id, "Запускаю нейросеть...")
 
         try:
-            bot.edit_message_text("⏳ Запуск анализа скриншотов в чате...", chat_id, message_id)
+            bot.edit_message_text("⏳ Запуск анализа скриншотов...", chat_id, message_id)
         except Exception as e:
             if "message is not modified" not in str(e):
                 pass
 
         photo_bytes_list = user_data[user_id].get("ocr_photos", [])
-        parsed_tasks = analyze_all_images_at_once_with_chat_logs(chat_id, message_id, photo_bytes_list, bot)
+        parsed_tasks = analyze_all_images_at_once_with_chat_logs(chat_id, message_id, photo_bytes_list, user_id, bot)
 
         user_data[user_id]["ocr_parsed_tasks"] = parsed_tasks
         show_ocr_results(chat_id, message_id, user_id)
         return
 
+    # ВАЖНО: Удаляем все фотографии и логи при сохранении
     if call.data == "confirm_ocr_save":
         tasks_to_add = user_data[user_id].get("ocr_parsed_tasks", [])
         if not tasks_to_add:
             bot.answer_callback_query(call.id, "Нет заданий для сохранения!")
             return
+
+        # Удаляем технические сообщения
+        clear_technical_ocr_messages(chat_id, user_id)
 
         saved_count = 0
         for t in tasks_to_add:
@@ -623,8 +662,10 @@ def callback_query(call):
                 pass
         return
 
+    # ВАЖНО: Удаляем все фотографии и логи при выходе на главную
     if call.data == "go_home":
         bot.answer_callback_query(call.id)
+        clear_technical_ocr_messages(chat_id, user_id)
         user_data[user_id]["ocr_photos"] = []
         try:
             bot.edit_message_text(
@@ -1053,7 +1094,9 @@ def handle_incoming_content(message):
     text = message.text or message.caption or ""
     step = user_data[user_id].get("step")
 
+    # Сбор фотографий для OCR (сохраняем ID сообщения с фото для последующей чистки)
     if step == "collecting_ocr_photos" and message.photo:
+        user_data[user_id]["ocr_photo_msg_ids"].append(message.message_id)
         try:
             file_info = bot.get_file(message.photo[-1].file_id)
             downloaded_bytes = bot.download_file(file_info.file_path)
@@ -1270,7 +1313,7 @@ def handle_incoming_content(message):
 
 
 if __name__ == "__main__":
-    print("Бот запущен с выводом логов в чат Telegram...")
+    print("Бот запущен с чисткой чата от технических логов и скриншотов...")
     if client:
         try:
             test_resp = client.models.generate_content(
