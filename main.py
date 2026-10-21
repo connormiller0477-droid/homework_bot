@@ -219,8 +219,8 @@ def clean_old_homeworks(user_id):
 
 
 def analyze_images_with_gemini(photo_bytes_list):
-    """Распознаёт задания на скриншотах через Gemini."""
-    print("--- ЗАПУСК АНАЛИЗА GEMINI ---")
+    """Распознаёт задания на скриншотах через Gemini, разбивая фото пачками по 2 штуки."""
+    print("--- ЗАПУСК АНАЛИЗА GEMINI (ПАКЕТНЫЙ РЕЖИМ ПО 2 ФОТО) ---")
 
     if not client:
         print("❌ GEMINI_API_KEY не задан в переменных окружения.")
@@ -230,8 +230,6 @@ def analyze_images_with_gemini(photo_bytes_list):
         print("❌ Список скриншотов пуст.")
         return []
 
-    # Передаём оригинальные байты изображения с корректным MIME-типом.
-    contents = []
     mime_by_format = {
         "JPEG": "image/jpeg",
         "JPG": "image/jpeg",
@@ -241,29 +239,38 @@ def analyze_images_with_gemini(photo_bytes_list):
         "BMP": "image/bmp",
     }
 
-    for index, image_bytes in enumerate(photo_bytes_list, start=1):
-        try:
-            with Image.open(io.BytesIO(image_bytes)) as img:
-                image_format = (img.format or "").upper()
-                mime_type = mime_by_format.get(image_format)
-                if not mime_type:
-                    raise ValueError(f"Неподдерживаемый формат изображения: {image_format or 'неизвестен'}")
-                img.verify()
+    all_valid_tasks = []
+    batch_size = 2
 
-            contents.append(
-                genai_types.Part.from_bytes(data=image_bytes, mime_type=mime_type)
-            )
-            print(f"✅ Скриншот #{index} подготовлен ({mime_type}, {len(image_bytes)} байт).")
-        except Exception as img_err:
-            print(f"❌ Скриншот #{index} пропущен: {img_err}")
+    # Разбиваем весь список скриншотов на пачки по 2 штуки
+    for batch_idx, i in enumerate(range(0, len(photo_bytes_list), batch_size), start=1):
+        batch_photos = photo_bytes_list[i:i + batch_size]
+        print(f"📦 Обработка пачки #{batch_idx} (скриншоты {i+1} - {i+len(batch_photos)})...")
 
-    if not contents:
-        print("❌ Не удалось подготовить ни одного изображения.")
-        return []
+        contents = []
+        for index, image_bytes in enumerate(batch_photos, start=1):
+            try:
+                with Image.open(io.BytesIO(image_bytes)) as img:
+                    image_format = (img.format or "").upper()
+                    mime_type = mime_by_format.get(image_format)
+                    if not mime_type:
+                        raise ValueError(f"Неподдерживаемый формат изображения: {image_format or 'неизвестен'}")
+                    img.verify()
 
-    current_year = datetime.now().year
-    prompt = f"""
-Проанализируй прикреплённые скриншоты школьного электронного дневника.
+                contents.append(
+                    genai_types.Part.from_bytes(data=image_bytes, mime_type=mime_type)
+                )
+                print(f"  ✅ Фото в пачке #{index} подготовлено ({mime_type}, {len(image_bytes)} байт).")
+            except Exception as img_err:
+                print(f"  ❌ Ошибка подготовки фото в пачке: {img_err}")
+
+        if not contents:
+            print(f"⚠️ Пачка #{batch_idx} пропущена, нет валидных изображений.")
+            continue
+
+        current_year = datetime.now().year
+        prompt = f"""
+Проанализируй прикреплённые скриншоты школьного электронного дневника (пачка {batch_idx}).
 Найди все домашние задания, которые явно указаны на скриншотах.
 
 Правила:
@@ -282,68 +289,58 @@ def analyze_images_with_gemini(photo_bytes_list):
 Если заданий нет, верни [].
 """
 
-    try:
-        print(f"⏳ Отправка {len(contents)} изображений в Gemini (модель gemini-3.5-flash)...")
-        response = client.models.generate_content(
-            model="gemini-3.5-flash",
-            contents=contents + [prompt],
-            config=genai_types.GenerateContentConfig(
-                response_mime_type="application/json",
-                temperature=0.1,
-            ),
-        )
+        try:
+            print(f"⏳ Отправка пачки #{batch_idx} в Gemini (модель gemini-3.5-flash)...")
+            response = client.models.generate_content(
+                model="gemini-3.5-flash",
+                contents=contents + [prompt],
+                config=genai_types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    temperature=0.1,
+                ),
+            )
 
-        response_text = getattr(response, "text", None)
-        if not response_text or not response_text.strip():
-            print("❌ Gemini вернула пустой ответ.")
-            print(f"Причина завершения ответа: {getattr(response, 'prompt_feedback', None)}")
-            return []
-
-        print(f"📥 Ответ Gemini получен ({len(response_text)} символов).")
-        cleaned_text = response_text.strip()
-
-        # На случай, если модель добавила Markdown-обрамление.
-        if cleaned_text.startswith("```"):
-            cleaned_text = cleaned_text.split("\n", 1)[-1]
-            if cleaned_text.rstrip().endswith("```"):
-                cleaned_text = cleaned_text.rstrip()[:-3].strip()
-
-        tasks = json.loads(cleaned_text)
-        if not isinstance(tasks, list):
-            raise ValueError("Ответ Gemini — JSON, но это не список.")
-
-        valid_tasks = []
-        for item in tasks:
-            if not isinstance(item, dict):
+            response_text = getattr(response, "text", None)
+            if not response_text or not response_text.strip():
+                print(f"⚠️ Пачка #{batch_idx}: Gemini вернула пустой ответ.")
                 continue
-            subject = str(item.get("subject", "")).strip()
-            date_val = str(item.get("date", "")).strip()
-            task_text = str(item.get("text", "")).strip()
-            if not (subject and date_val and task_text):
-                print(f"⚠️ Пропущен неполный элемент: {item}")
+
+            cleaned_text = response_text.strip()
+            if cleaned_text.startswith("```"):
+                cleaned_text = cleaned_text.split("\n", 1)[-1]
+                if cleaned_text.rstrip().endswith("```"):
+                    cleaned_text = cleaned_text.rstrip()[:-3].strip()
+
+            tasks = json.loads(cleaned_text)
+            if not isinstance(tasks, list):
                 continue
-            try:
-                parsed_date = parse_flexible_date(date_val)
-                date_val = parsed_date.strftime("%d.%m.%Y")
-            except (ValueError, TypeError):
-                print(f"⚠️ Пропущено задание с неверной датой: {item}")
-                continue
-            valid_tasks.append({
-                "subject": subject,
-                "date": date_val,
-                "text": task_text,
-            })
 
-        print(f"✅ Успешно распознано заданий: {len(valid_tasks)}")
-        return valid_tasks
+            for item in tasks:
+                if not isinstance(item, dict):
+                    continue
+                subject = str(item.get("subject", "")).strip()
+                date_val = str(item.get("date", "")).strip()
+                task_text = str(item.get("text", "")).strip()
+                if not (subject and date_val and task_text):
+                    continue
+                try:
+                    parsed_date = parse_flexible_date(date_val)
+                    date_val = parsed_date.strftime("%d.%m.%Y")
+                except (ValueError, TypeError):
+                    continue
+                
+                # Добавляем задачу, избегая дубликатов между разными пачками
+                new_task = {"subject": subject, "date": date_val, "text": task_text}
+                if new_task not in all_valid_tasks:
+                    all_valid_tasks.append(new_task)
 
-    except json.JSONDecodeError as e:
-        print(f"❌ Gemini вернула некорректный JSON: {e}")
-        print(f"Ответ для диагностики: {getattr(response, 'text', '')[:1000] if 'response' in locals() else 'ответ отсутствует'}")
-    except Exception as e:
-        print(f"❌ Ошибка Gemini API или обработки изображения: {type(e).__name__}: {e}")
+            print(f"✅ Пачка #{batch_idx} успешно обработана.")
 
-    return []
+        except Exception as e:
+            print(f"❌ Ошибка в пачке #{batch_idx} при запросе к Gemini: {type(e).__name__}: {e}")
+
+    print(f"🎉 Итого распознано уникальных заданий со всех пачек: {len(all_valid_tasks)}")
+    return all_valid_tasks
 
 
 def show_ocr_results(chat_id, message_id, user_id):
@@ -537,7 +534,7 @@ def callback_query(call):
         bot.answer_callback_query(call.id, "Запускаю нейросеть...")
 
         try:
-            bot.edit_message_text("⏳ Нейросеть изучает скриншоты... Это займет несколько секунд.", chat_id, message_id)
+            bot.edit_message_text("⏳ Нейросеть изучает скриншоты пачками... Это займет несколько секунд.", chat_id, message_id)
         except Exception as e:
             if "message is not modified" not in str(e):
                 pass
