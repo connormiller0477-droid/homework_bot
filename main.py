@@ -1,5 +1,5 @@
 import os
-import sqlite3#
+import sqlite3
 from datetime import datetime, timedelta
 import telebot
 from telebot import types
@@ -218,16 +218,16 @@ def clean_old_homeworks(user_id):
         homework_storage[subj] = filtered_global
 
 
-def analyze_images_separately(chat_id, message_id, photo_bytes_list, bot_instance):
-    """Анализирует каждое фото строго по отдельности с подробными логами на каждом этапе."""
-    print("--- [LOG] ЗАПУСК ПОЭТАПНОГО АНАЛИЗА КАЖДОГО ФОТО ОТДЕЛЬНО ---")
+def analyze_all_images_at_once(chat_id, message_id, photo_bytes_list, bot_instance):
+    """Отправляет абсолютно ВСЕ скриншоты в одном запросе к Gemini API."""
+    print("\n--- [LOG] ЗАПУСК ЕДИНОРАЗОВОГО АНАЛИЗА ВСЕХ СКРИНШОТОВ СРАЗУ ---")
 
     if not client:
-        print("❌ [LOG] ОШИБКА: GEMINI_API_KEY не задан в переменных окружения.")
+        print("❌ [LOG] ОШИБКА: GEMINI_API_KEY не задан в переменной окружения.")
         return []
 
     if not photo_bytes_list:
-        print("⚠️ [LOG] ВНИМАНИЕ: Список переданных фото пуст.")
+        print("⚠️ [LOG] ВНИМАНИЕ: Список фото пуст.")
         return []
 
     mime_by_format = {
@@ -239,147 +239,136 @@ def analyze_images_separately(chat_id, message_id, photo_bytes_list, bot_instanc
         "BMP": "image/bmp",
     }
 
-    all_valid_tasks = []
+    contents = []
     total_photos = len(photo_bytes_list)
-    print(f"📷 [LOG] Всего получено фотографий для анализа: {total_photos}")
+    print(f"📷 [LOG] Подготовка {total_photos} фотографий для единой отправки...")
 
-    for idx, image_bytes in enumerate(photo_bytes_list, start=1):
-        print(f"\n--- [LOG] Обработка фото {idx} из {total_photos} (байтов: {len(image_bytes)}) ---")
-        
-        status_text = f"⏳ Обработка фото {idx} из {total_photos}..."
+    # Уровень 1: Подготовка всех файлов
+    for index, image_bytes in enumerate(photo_bytes_list, start=1):
         try:
-            bot_instance.edit_message_text(status_text, chat_id, message_id)
-        except Exception as e:
-            print(f"ℹ️ [LOG] Не удалось обновить статусное сообщение в Telegram (не критично): {e}")
-
-        # Уровень 1: Подготовка и проверка изображения через Pillow
-        try:
-            print(f"🔍 [LOG] [Фото {idx}] Шаг 1: Открытие и верификация изображения через PIL...")
             with Image.open(io.BytesIO(image_bytes)) as img:
                 image_format = (img.format or "").upper()
-                print(f"ℹ️ [LOG] [Фото {idx}] Формат изображения определен как: {image_format}")
                 mime_type = mime_by_format.get(image_format)
                 if not mime_type:
-                    raise ValueError(f"Неподдерживаемый формат изображения: {image_format}")
+                    raise ValueError(f"Неподдерживаемый формат: {image_format}")
                 img.verify()
 
-            image_part = genai_types.Part.from_bytes(data=image_bytes, mime_type=mime_type)
-            print(f"✅ [LOG] [Фото {idx}] Шаг 1 УСПЕШЕН: изображение сконвертировано в Part ({mime_type}).")
+            contents.append(
+                genai_types.Part.from_bytes(data=image_bytes, mime_type=mime_type)
+            )
+            print(f"✅ [LOG] Фото #{index} из {total_photos} успешно обработано PIL ({mime_type}, {len(image_bytes)} байт).")
         except Exception as img_err:
-            print(f"❌ [LOG] [Фото {idx}] ОШИБКА на Шаге 1 (подготовка фото): {type(img_err).__name__}: {img_err}")
-            continue
+            print(f"❌ [LOG] Ошибка подготовки фото #{index}: {type(img_err).__name__}: {img_err}")
 
-        current_year = datetime.now().year
-        prompt = f"""
-Проанализируй прикреплённый скриншот школьного электронного дневника (фото {idx} из {total_photos}).
-Найди все домашние задания, которые явно указаны на этом изображении.
+    if not contents:
+        print("❌ [LOG] Ни одно изображение не прошло проверку. Запрос отменён.")
+        return []
 
-Правила:
-1. subject — название школьного предмета, как оно написано на скриншоте.
-2. date — дата сдачи задания, а не дата публикации. Верни дату в формате ДД.ММ.ГГГГ.
-   Если на скриншоте указан день недели и дата без года, используй {current_year}.
-   Не выдумывай дату, если её невозможно определить: в таком случае пропусти задание.
-3. text — текст домашнего задания. Не включай тему урока, если она не является заданием.
-4. Не придумывай данные, которых нет на изображении.
+    current_year = datetime.now().year
+    prompt = f"""
+Проанализируй прикреплённые скриншоты школьного электронного дневника (Сетевой Город).
+Внимательно просмотри КАЖДОЕ изображение и найди абсолютно ВСЕ домашние задания по ВСЕМ предметам.
 
-Верни только JSON-массив объектов следующего вида:
+Инструкция:
+1. subject — точное название предмета со скриншота (например: Алгебра, Русский язык, Физика и т.д.).
+2. date — дата, на которую задано задание (дата сдачи). Верни её строго в формате ДД.ММ.ГГГГ.
+   Если указан только день и месяц без года, подставь {current_year} год.
+3. text — только сама домашняя работа. Не включай темы уроков или лишний системный текст.
+4. Внимательно проверяй каждый предмет со всех скриншотов, не ограничивайся только одним предметом!
+5. Если одно и то же задание с той же датой повторяется, не дублируй его.
+
+Верни результат ИСКЛЮЧИТЕЛЬНО в формате JSON-массива:
 [
-  {{"subject": "Алгебра", "date": "21.10.{current_year}", "text": "стр. 20, упражнение 5"}}
+  {{"subject": "Алгебра", "date": "21.10.{current_year}", "text": "№ 123, 125"}},
+  {{"subject": "Русский язык", "date": "22.10.{current_year}", "text": "упражнение 45"}}
 ]
-Если заданий нет, верни [].
+Если домашних заданий вообще нет ни на одном скриншоте, верни [].
 """
 
-        # Уровень 2: Отправка запроса к Gemini API
-        try:
-            print(f"📤 [LOG] [Фото {idx}] Шаг 2: Отправка запроса в Gemini API (модель: gemini-3.5-flash)...")
-            response = client.models.generate_content(
-                model="gemini-3.5-flash",
-                contents=[image_part, prompt],
-                config=genai_types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                    temperature=0.1,
-                ),
-            )
-            print(f"📥 [LOG] [Фото {idx}] Шаг 2 УСПЕШЕН: ответ от Gemini получен.")
-        except Exception as api_err:
-            print(f"❌ [LOG] [Фото {idx}] ОШИБКА на Шаге 2 (запрос к API): {type(api_err).__name__}: {api_err}")
-            continue
+    # Уровень 2: Отправка всех файлов в одном запросе
+    try:
+        print(f"📤 [LOG] Отправка единого запроса с {len(contents)} изображениями в Gemini API (gemini-3.5-flash)...")
+        response = client.models.generate_content(
+            model="gemini-3.5-flash",
+            contents=contents + [prompt],
+            config=genai_types.GenerateContentConfig(
+                response_mime_type="application/json",
+                temperature=0.1,
+            ),
+        )
+        print("📥 [LOG] Ответ от Gemini API успешно получен.")
+    except Exception as api_err:
+        print(f"❌ [LOG] ОШИБКА API запроса: {type(api_err).__name__}: {api_err}")
+        return []
 
-        # Уровень 3: Анализ сырого ответа (response.text)
-        try:
-            print(f"🔍 [LOG] [Фото {idx}] Шаг 3: Извлечение текста из ответа API...")
-            response_text = getattr(response, "text", None)
-            if not response_text or not response_text.strip():
-                print(f"⚠️ [LOG] [Фото {idx}] Предупреждение: Gemini вернула пустой ответ. Промпт-фидбек: {getattr(response, 'prompt_feedback', None)}")
+    # Уровень 3: Анализ сырого ответа
+    try:
+        response_text = getattr(response, "text", None)
+        if not response_text or not response_text.strip():
+            print(f"⚠️ [LOG] Предупреждение: Ответ от Gemini пустой! Причина: {getattr(response, 'prompt_feedback', None)}")
+            return []
+
+        print(f"📄 [LOG] Сырой ответ от Gemini (первые 600 символов):\n{response_text[:600]}")
+
+        cleaned_text = response_text.strip()
+        if cleaned_text.startswith("```"):
+            cleaned_text = cleaned_text.split("\n", 1)[-1]
+            if cleaned_text.rstrip().endswith("```"):
+                cleaned_text = cleaned_text.rstrip()[:-3].strip()
+    except Exception as text_err:
+        print(f"❌ [LOG] Ошибка чтения текста ответа: {text_err}")
+        return []
+
+    # Уровень 4: Декодирование JSON
+    all_valid_tasks = []
+    try:
+        tasks = json.loads(cleaned_text)
+        if not isinstance(tasks, list):
+            print(f"⚠️ [LOG] Ошибка: Нейросеть вернула JSON, но не список: {type(tasks)}")
+            return []
+
+        print(f"📋 [LOG] Модель выделила заданий: {len(tasks)}")
+
+        for item_idx, item in enumerate(tasks, start=1):
+            if not isinstance(item, dict):
                 continue
-            
-            print(f"📄 [LOG] [Фото {idx}] Сырой текст ответа от модели (первые 500 символов):\n{response_text[:500]}")
-            
-            cleaned_text = response_text.strip()
-            if cleaned_text.startswith("```"):
-                cleaned_text = cleaned_text.split("\n", 1)[-1]
-                if cleaned_text.rstrip().endswith("```"):
-                    cleaned_text = cleaned_text.rstrip()[:-3].strip()
-            print(f"✅ [LOG] [Фото {idx}] Шаг 3 УСПЕШЕН: текст очищен от Markdown-разметки.")
-        except Exception as text_err:
-            print(f"❌ [LOG] [Фото {idx}] ОШИБКА на Шаге 3 (обработка текста ответа): {type(text_err).__name__}: {text_err}")
-            continue
+            subject = str(item.get("subject", "")).strip()
+            date_val = str(item.get("date", "")).strip()
+            task_text = str(item.get("text", "")).strip()
 
-        # Уровень 4: Парсинг JSON и фильтрация заданий
-        try:
-            print(f"⚙️ [LOG] [Фото {idx}] Шаг 4: Декодирование JSON и валидация данных...")
-            tasks = json.loads(cleaned_text)
-            if not isinstance(tasks, list):
-                print(f"⚠️ [LOG] [Фото {idx}] Ошибка валидации: JSON от модели не является списком! Получено: {type(tasks)}")
+            if not (subject and date_val and task_text):
+                print(f"⚠️ [LOG] Задание #{item_idx} пропущено (неполные данные): {item}")
                 continue
 
-            print(f"📋 [LOG] [Фото {idx}] Модель нашла сырых элементов в JSON: {len(tasks)}")
-            added_from_this_photo = 0
+            try:
+                parsed_date = parse_flexible_date(date_val)
+                date_val = parsed_date.strftime("%d.%m.%Y")
+            except (ValueError, TypeError) as date_err:
+                print(f"⚠️ [LOG] Задание #{item_idx} пропущено из-за некорректной даты '{date_val}': {date_err}")
+                continue
 
-            for item_idx, item in enumerate(tasks, start=1):
-                if not isinstance(item, dict):
-                    print(f"⚠️ [LOG] [Фото {idx}] Элемент #{item_idx} пропущен (не является словарём).")
-                    continue
-                subject = str(item.get("subject", "")).strip()
-                date_val = str(item.get("date", "")).strip()
-                task_text = str(item.get("text", "")).strip()
+            new_task = {"subject": subject, "date": date_val, "text": task_text}
+            if new_task not in all_valid_tasks:
+                all_valid_tasks.append(new_task)
+                print(f"➕ [LOG] Распознано: [{subject}] на {date_val} -> {task_text[:40]}...")
 
-                if not (subject and date_val and task_text):
-                    print(f"⚠️ [LOG] [Фото {idx}] Элемент #{item_idx} пропущен (неполные данные): subject='{subject}', date='{date_val}', text='{task_text}'")
-                    continue
+        print(f"\n🎉 [LOG] АНАЛИЗ ЗАВЕРШЕН! Успешно извлечено уникальных заданий: {len(all_valid_tasks)}")
+        return all_valid_tasks
 
-                try:
-                    parsed_date = parse_flexible_date(date_val)
-                    date_val = parsed_date.strftime("%d.%m.%Y")
-                except (ValueError, TypeError) as date_err:
-                    print(f"⚠️ [LOG] [Фото {idx}] Элемент #{item_idx} пропущен (неверный формат даты '{date_val}'): {date_err}")
-                    continue
-                
-                new_task = {"subject": subject, "date": date_val, "text": task_text}
-                if new_task not in all_valid_tasks:
-                    all_valid_tasks.append(new_task)
-                    added_from_this_photo += 1
-                    print(f"➕ [LOG] [Фото {idx}] Добавлено задание: [{subject}] на {date_val} -> {task_text[:40]}...")
-                else:
-                    print(f"🔄 [LOG] [Фото {idx}] Дубликат пропущен: [{subject}] на {date_val}")
+    except json.JSONDecodeError as json_err:
+        print(f"❌ [LOG] Ошибка декодирования JSON: {json_err}")
+        print(f"📝 [LOG] Сырой проблемный текст:\n{cleaned_text}")
+    except Exception as parse_err:
+        print(f"❌ [LOG] Неизвестная ошибка обработки результата: {parse_err}")
 
-            print(f"✅ [LOG] [Фото {idx}] Шаг 4 УСПЕШЕН. Из этого фото успешно извлечено новых заданий: {added_from_this_photo}")
-
-        except json.JSONDecodeError as json_err:
-            print(f"❌ [LOG] [Фото {idx}] ОШИБКА на Шаге 4 (некорректный JSON от модели): {json_err}")
-            print(f"📝 [LOG] [Фото {idx}] Проблемный текст, который пытались распарсить:\n{cleaned_text}")
-        except Exception as parse_err:
-            print(f"❌ [LOG] [Фото {idx}] ОШИБКА на Шаге 4 (общая ошибка парсинга): {type(parse_err).__name__}: {parse_err}")
-
-    print(f"\n🎉 [LOG] ПОЛНЫЙ АНАЛИЗ ЗАВЕРШЕН. Всего уникальных заданий собрано со всех фото: {len(all_valid_tasks)}")
-    return all_valid_tasks
+    return []
 
 
 def show_ocr_results(chat_id, message_id, user_id):
     parsed_tasks = user_data[user_id].get("ocr_parsed_tasks", [])
     markup = types.InlineKeyboardMarkup()
     if parsed_tasks:
-        text = f"🤖 **Нейросеть проанализировала все фото отдельно и нашла заданий: {len(parsed_tasks)}**\n\n"
+        text = f"🤖 **Нейросеть проанализировала все скриншоты и нашла заданий: {len(parsed_tasks)}**\n\n"
         for idx, item in enumerate(parsed_tasks):
             text += f"{idx + 1}. Предмет: {item['subject']}\n"
             text += f"Дата: {item['date']}\n"
@@ -566,7 +555,7 @@ def callback_query(call):
         bot.answer_callback_query(call.id, "Запускаю нейросеть...")
 
         try:
-            bot.edit_message_text("⏳ Запуск анализа каждого фото по отдельности...", chat_id, message_id)
+            bot.edit_message_text("⏳ Изучаю все скриншоты сразу... Это займёт несколько секунд.", chat_id, message_id)
         except Exception as e:
             if "message is not modified" not in str(e):
                 pass
@@ -577,7 +566,7 @@ def callback_query(call):
             pass
 
         photo_bytes_list = user_data[user_id].get("ocr_photos", [])
-        parsed_tasks = analyze_images_separately(chat_id, message_id, photo_bytes_list, bot)
+        parsed_tasks = analyze_all_images_at_once(chat_id, message_id, photo_bytes_list, bot)
 
         user_data[user_id]["ocr_parsed_tasks"] = parsed_tasks
         show_ocr_results(chat_id, message_id, user_id)
