@@ -283,9 +283,9 @@ def analyze_images_with_gemini(photo_bytes_list):
 """
 
     try:
-        print(f"⏳ Отправка {len(contents)} изображений в Gemini (модель gemini-3.8-flash)...")
+        print(f"⏳ Отправка {len(contents)} изображений в Gemini (модель gemini-3.5-flash)...")
         response = client.models.generate_content(
-            model="gemini-3.8-flash",
+            model="gemini-3.5-flash",
             contents=contents + [prompt],
             config=genai_types.GenerateContentConfig(
                 response_mime_type="application/json",
@@ -1275,7 +1275,7 @@ if __name__ == "__main__":
     if client:
         try:
             test_resp = client.models.generate_content(
-                model='gemini-3.8-flash',
+                model='gemini-3.5-flash',
                 contents='Ответь словом "ОК", если видишь этот запрос'
             )
             print(f"ТЕСТ GEMINI API УСПЕШЕН: {test_resp.text}")
