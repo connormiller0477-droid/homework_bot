@@ -1,127 +1,96 @@
-            pass
-      msg = bot.send_message(chat_id, error_text, reply_markup=markup)
-      user_data[user_id]["current_msg_id"] = msg.message_id
-      return
+import io
+import json
+import os
+import socket
+import sqlite3
+import threading
+from datetime import datetime, timedelta
 
+from google import genai
+from google.genai import types as genai_types
+from PIL import Image
+import telebot
+from telebot import types
+
+
+# --- СТАБИЛЬНЫЙ МИНИ-СЕРВЕР ДЛЯ RENDER (В ОТДЕЛЬНОМ ПОТОКЕ СОКЕТОВ) ---
+def run_web_server():
+  port = int(os.environ.get("PORT", 10000))
+  server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+  server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+  server_socket.bind(("0.0.0.0", port))
+  server_socket.listen(5)
+  while True:
     try:
-      bot.delete_message(chat_id, message.message_id)
+      client_socket, _ = server_socket.accept()
+      request = client_socket.recv(1024)
+      response = b"HTTP/1.1 200 OK\r\nContent-Length: 13\r\n\r\nBot is running"
+      client_socket.sendall(response)
+      client_socket.close()
     except Exception:
       pass
 
-    user_data[user_id]["temp_date"] = text
-    user_data[user_id]["step"] = "waiting_text"
-    prompt_text = (
-        f"📅 Дата {text} сохранена.\n\nТеперь отправь текст домашнего задания"
-        " (можно прикрепить фото, видео или документ):"
-    )
-    markup = types.InlineKeyboardMarkup()
-    markup.row(types.InlineKeyboardButton("🏠 На главную", callback_data="go_home"))
 
-    menu_id = user_data[user_id].get("current_msg_id")
-    if menu_id:
-      try:
-        bot.edit_message_text(
-            prompt_text, chat_id, menu_id, reply_markup=markup
-        )
-        return
-      except Exception as e:
-        if "message is not modified" not in str(e):
-          pass
-    msg = bot.send_message(chat_id, prompt_text, reply_markup=markup)
-    user_data[user_id]["current_msg_id"] = msg.message_id
-    return
+threading.Thread(target=run_web_server, daemon=True).start()
+# -------------------------------------------------------------------------
 
-  if step == "waiting_text":
-    try:
-      bot.delete_message(chat_id, message.message_id)
-    except Exception:
-      pass
+TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
+if not TOKEN:
+  raise RuntimeError("Переменная окружения TELEGRAM_BOT_TOKEN не задана!")
+bot = telebot.TeleBot(TOKEN)
 
-    subject = user_data[user_id]["target_subject"]
-    date_val = user_data[user_id]["temp_date"]
-    user_data[user_id]["target_subject"] = None
-    user_data[user_id]["step"] = None
-    user_data[user_id]["temp_date"] = None
+# Безопасная инициализация клиента Gemini API через переменную окружения Render
+gemini_key = os.environ.get("GEMINI_API_KEY")
+if gemini_key:
+  client = genai.Client(api_key=gemini_key)
+else:
+  print("ВНИМАНИЕ: Переменная GEMINI_API_KEY не задана в Environment Variables!")
+  client = None
 
-    file_id = None
-    file_type = None
+DB_FILE = "homework.db"
 
-    if message.photo:
-      file_id = message.photo[-1].file_id
-      file_type = "photo"
-      if not text:
-        text = "📁 Фотография к заданию"
-    elif message.document:
-      file_id = message.document.file_id
-      file_type = "document"
-      if not text:
-        text = f"📁 Документ: {message.document.file_name}"
-    elif message.video:
-      file_id = message.video.file_id
-      file_type = "video"
-      if not text:
-        text = "📁 Видеоматериал к заданию"
-
-    if not text:
-      text = "Без текстового описания"
-
-    task_info = {
-        "date": date_val,
-        "text": text,
-        "file_id": file_id,
-        "file_type": file_type,
-    }
-
-    add_homework_to_db(subject, date_val, text, file_id, file_type)
-    if subject not in homework_storage:
-      homework_storage[subject] = []
-    homework_storage[subject].append(task_info)
-
-    for uid in user_data:
-      if subject not in user_data[uid]["active"]:
-        user_data[uid]["active"][subject] = []
-        user_data[uid]["completed"][subject] = []
-      user_data[uid]["active"][subject].append(task_info)
-
-    success_text = (
-        f"✅ ДЗ успешно добавлено!\n\nПредмет: {subject}\nДата:"
-        f" {date_val}\nЗадание: {text}"
-    )
-    markup = types.InlineKeyboardMarkup()
-    markup.row(types.InlineKeyboardButton("🏠 На главную", callback_data="go_home"))
-
-    menu_id = user_data[user_id]["current_msg_id"]
-    if menu_id:
-      try:
-        bot.edit_message_text(
-            success_text, chat_id, menu_id, reply_markup=markup
-        )
-        return
-      except Exception as e:
-        if "message is not modified" not in str(e):
-          pass
-    msg = bot.send_message(chat_id, success_text, reply_markup=markup)
-    user_data[user_id]["current_msg_id"] = msg.message_id
-    return
-
-  try:
-    bot.delete_message(chat_id, message.message_id)
-  except Exception:
-    pass
+subjects_list = [
+    "Алгебра",
+    "Биология",
+    "Вероятность и статистика",
+    "География",
+    "Геометрия",
+    "Английский язык",
+    "Информатика",
+    "История",
+    "Литература",
+    "Обществознание",
+    "ОБЗР",
+    "Проектная деятельность",
+    "Русский язык",
+    "Технология",
+    "Физика",
+    "Физра",
+    "Химия",
+]
 
 
-if __name__ == "__main__":
-  print("Бот запущен с моделью gemini-3.5-flash-lite...")
-  if client:
-    try:
-      test_resp = client.models.generate_content(
-          model="gemini-3.5-flash-lite",
-          contents='Ответь словом "ОК", если видишь этот запрос',
-      )
-      print(f"ТЕСТ GEMINI API УСПЕШЕН: {test_resp.text}")
-    except Exception as err:
-      print(f"ОШИБКА ТЕСТА GEMINI API: {err}")
+def parse_flexible_date(date_text):
+  """Превращает даты вида 9.9.2026, 09.9.2026, 9.9 или 09.09.2026 в объект date."""
+  date_text = date_text.strip()
+  current_year = datetime.now().year
+  parts = date_text.split(".")
+  if len(parts) == 2:
+    day, month = parts
+    formatted_str = f"{day.zfill(2)}.{month.zfill(2)}.{current_year}"
+    return datetime.strptime(formatted_str, "%d.%m.%Y").date()
+  elif len(parts) == 3:
+    day, month, year = parts
+    if len(year) == 2:
+      year = "20" + year
+    formatted_str = f"{day.zfill(2)}.{month.zfill(2)}.{year}"
+    return datetime.strptime(formatted_str, "%d.%m.%Y").date()
   else:
-    print("ТЕСТ ОТМЕНЕН: Ключ GEMINI_API_KEY отсутствует!")
+    raise ValueError("Неверный формат даты")
 
-  bot.infinity_polling(skip_pending=True, interval=1, timeout=20)
+
+def init_db():
+  conn = sqlite3.connect(DB_FILE)
+  cursor = conn.cursor()
+  cursor.execute("""
+        CREATE TABLE IF NOT EXISTS homeworks (
